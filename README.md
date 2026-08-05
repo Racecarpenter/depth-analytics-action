@@ -110,6 +110,7 @@ cp .env.example .env.local
 | `CRON_SECRET` | Same as above — also matched automatically by Vercel Cron in production. |
 | `SMS_PROVIDER` | `mock` for local dev (default) |
 | `SPORTS_DATA_PROVIDER` | `mock` for local dev (default) |
+| `SITE_PASSWORD` / `SITE_GATE_SECRET` | Optional. Leave both blank locally. See "Site-wide password gate" below. |
 
 ### 5. Run it
 
@@ -161,6 +162,16 @@ Relevant code:
 - `src/app/api/cron/settle/route.ts` — after grading an Action, if the winner has a cashtag and the loser has a phone on file, texts the loser the pay link through the same `SmsProvider` abstraction used for invites (best-effort — a failed text never blocks settlement itself).
 
 If you want real automated transfers instead of a tap-to-confirm link, see `PATH_TO_PRODUCTION.md` for why that requires becoming a licensed money transmitter (or partnering with one) and is out of scope for this MVP.
+
+---
+
+## Site-wide password gate
+
+Independent of the phone-auth system above — this is a single shared password for the *whole app*, meant for keeping a live domain private before it's ready for real users. When both `SITE_PASSWORD` and `SITE_GATE_SECRET` are set, `middleware.ts` redirects every request (except `/coming-soon` itself and the settlement cron) to a `/coming-soon` page until the visitor enters the password, at which point it sets a signed, expiring cookie (`src/lib/utils/site-gate.ts`) and lets them through to the normal phone-auth-gated app.
+
+**To turn it on**: set `SITE_PASSWORD` (any string) and `SITE_GATE_SECRET` (`openssl rand -hex 32`) in Vercel's environment variables, then redeploy.
+
+**To turn it off later**: delete both variables in Vercel and redeploy — the gate is skipped entirely whenever either one is unset, no code changes needed. Don't forget to actually do this before a real launch; it's easy to leave in place by accident.
 
 ---
 
