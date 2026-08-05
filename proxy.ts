@@ -1,11 +1,11 @@
-// Next.js <= 15 entry point. Next.js 16+ uses proxy.ts instead (see that
-// file) — a leftover middleware.ts is silently ignored on 16+ with no build
-// error, so both files exist side by side and share the same logic from
-// src/lib/middleware-handler.ts until this project is fully off 15.x.
+// Next.js 16+ entry point (Next.js renamed the middleware.ts convention to
+// proxy.ts in 16.0.0 — a leftover middleware.ts is silently ignored on 16+
+// with no build error). middleware.ts still exists alongside this for
+// Next.js <= 15; both share the same logic from src/lib/middleware-handler.ts.
 import type { NextRequest } from "next/server";
 import { handleRequest } from "@/lib/middleware-handler";
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   return handleRequest(request);
 }
 
