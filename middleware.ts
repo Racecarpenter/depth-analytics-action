@@ -6,6 +6,7 @@ import type { NextRequest } from "next/server";
 import { handleRequest } from "@/lib/middleware-handler";
 
 export async function middleware(request: NextRequest) {
+  console.log('da fuq')
   return handleRequest(request);
 }
 

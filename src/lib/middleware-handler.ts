@@ -29,13 +29,24 @@ function isPublicRoute(pathname: string) {
 async function checkSiteGate(request: NextRequest): Promise<NextResponse | null> {
   const secret = process.env.SITE_GATE_SECRET;
   const password = process.env.SITE_PASSWORD;
-  if (!secret || !password) return null;
-
   const { pathname } = request.nextUrl;
+
+  // TEMPORARY — remove once the gate is confirmed working. Logs to Vercel's
+  // Runtime Logs (Observability tab) on every request this code path runs.
+  console.log("[site-gate]", {
+    pathname,
+    secretSet: Boolean(secret),
+    passwordSet: Boolean(password),
+    hasCookie: Boolean(request.cookies.get(SITE_GATE_COOKIE)?.value),
+  });
+
+  if (!secret || !password) return null;
   if (pathname === "/coming-soon") return null;
 
   const token = request.cookies.get(SITE_GATE_COOKIE)?.value;
-  if (await isValidGateToken(token, secret)) return null;
+  const valid = await isValidGateToken(token, secret);
+  console.log("[site-gate] tokenValid:", valid);
+  if (valid) return null;
 
   const gateUrl = new URL("/coming-soon", request.url);
   gateUrl.searchParams.set("next", pathname);
@@ -49,6 +60,7 @@ async function checkSiteGate(request: NextRequest): Promise<NextResponse | null>
  * has to be reachable from both entry points during the transition).
  */
 export async function handleRequest(request: NextRequest): Promise<NextResponse> {
+  console.log('goofy ass bullshit')
   const gateRedirect = await checkSiteGate(request);
   if (gateRedirect) return gateRedirect;
 
