@@ -52,6 +52,9 @@ export async function isValidGateToken(token: string | undefined, secret: string
   const parts = token.split(".");
   if (parts.length !== 3) return false;
   const [marker, expStr, sig] = parts;
+  // Redundant with the length check above at runtime, but noUncheckedIndexedAccess
+  // still types plain-array destructuring as possibly-undefined — narrow explicitly.
+  if (!marker || !expStr || !sig) return false;
   if (marker !== "granted") return false;
 
   const exp = Number(expStr);
