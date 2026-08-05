@@ -1,0 +1,31 @@
+project_id = "action-by-depth-analytics"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["http://localhost:3000"]
+jwt_expiry = 3600
+enable_signup = true
+
+[auth.sms]
+enable_signup = true
+enable_confirmations = true
+# Local/dev: Supabase's built-in test-OTP mode can be used instead of a real
+# provider. In production this app manages its own OTP flow through the
+# pluggable SmsProvider abstraction (see src/lib/sms), so Supabase phone
+# provider settings here are only used for local `supabase start` testing.

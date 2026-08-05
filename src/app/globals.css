@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html {
+  @apply bg-bg;
+}
+
+body {
+  @apply bg-bg text-ink antialiased;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  /* A near-invisible grid, the only nod to the terminal/matrix reference —
+     it should read as "premium texture", never as a pattern you notice. */
+  background-image:
+    linear-gradient(rgba(47, 229, 138, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(47, 229, 138, 0.025) 1px, transparent 1px);
+  background-size: 44px 44px;
+  background-position: center top;
+}
+
+* {
+  @apply border-border;
+}
+
+::selection {
+  background-color: rgba(47, 229, 138, 0.25);
+  color: #ffffff;
+}
+
+/* Minimal, calm scrollbars */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: theme("colors.border.strong");
+  border-radius: 8px;
+  border: 2px solid theme("colors.bg.DEFAULT");
+}
+
+.mono-nums {
+  font-family: theme("fontFamily.mono");
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.tap-target {
+  min-height: 44px;
+}
