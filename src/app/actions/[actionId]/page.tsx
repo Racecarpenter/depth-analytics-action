@@ -1,9 +1,7 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AppHeader } from "@/components/layout/app-header";
 import { BackLink } from "@/components/layout/back-link";
 import { PageContainer } from "@/components/layout/page-container";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { requireUser } from "@/features/auth/session";
 import { CancelActionButton } from "@/features/actions/components/cancel-action-button";
@@ -11,8 +9,10 @@ import { StatusPill } from "@/features/actions/components/status-pill";
 import { ActionStatusHistoryList } from "@/features/actions/components/action-status-history";
 import { getActionById, getActionStatusHistory } from "@/features/actions/queries";
 import { findParticipant, getWinnerLoser, opponentOf, personalStatus } from "@/features/actions/types";
+import { PaymentSettlementCard } from "@/features/settlement/components/payment-settlement-card";
+import { getLastNudgeAt } from "@/features/settlement/queries";
+import { MANUAL_NUDGE_COOLDOWN_HOURS } from "@/lib/settlement/reminder-schedule";
 import { MARKET_LABELS, STAKE_DISCLAIMER } from "@/lib/constants";
-import { buildCashAppPayLink } from "@/lib/utils/cash-app";
 import { formatStake } from "@/lib/utils/currency";
 import { formatGameTime } from "@/lib/utils/date";
 import { maskPhone } from "@/lib/utils/phone";
@@ -35,13 +35,14 @@ export default async function ActionDetailPage({
   const isLocked = action.status !== "pending" && action.status !== "declined" && action.status !== "cancelled";
   const isFinal = ["won", "lost", "push"].includes(action.status);
   const winnerLoser = getWinnerLoser(action);
-  const viewerOwesMoney = winnerLoser?.loser.user_id === user.id;
-  const payLink =
-    viewerOwesMoney && winnerLoser && action.stake_amount && winnerLoser.winner.user?.cashtag
-      ? buildCashAppPayLink(
-          winnerLoser.winner.user.cashtag,
-          action.stake_amount,
-          `${action.game.away_team.abbreviation}@${action.game.home_team.abbreviation} — ACTION`,
+  const viewerPaymentRole: "winner" | "loser" | null =
+    winnerLoser?.winner.user_id === user.id ? "winner" : winnerLoser?.loser.user_id === user.id ? "loser" : null;
+  const showPaymentCard = winnerLoser !== null && action.payment_status !== "not_applicable" && viewerPaymentRole !== null;
+
+  const nudgeAvailableAt =
+    showPaymentCard && action.payment_status === "owed"
+      ? await getLastNudgeAt(action.id).then((lastNudgeAt) =>
+          lastNudgeAt ? new Date(new Date(lastNudgeAt).getTime() + MANUAL_NUDGE_COOLDOWN_HOURS * 3_600_000).toISOString() : null,
         )
       : null;
 
@@ -110,51 +111,16 @@ export default async function ActionDetailPage({
           </CardContent>
         </Card>
 
-        {winnerLoser && action.stake_amount && (
-          <Card className="mb-5">
-            <CardContent className="pt-5">
-              {viewerOwesMoney ? (
-                payLink ? (
-                  <>
-                    <p className="text-sm font-medium text-ink">
-                      You owe {formatStake(action.stake_amount)} — ${winnerLoser.winner.user?.cashtag}
-                    </p>
-                    <p className="mt-1 text-xs text-ink-faint">
-                      Opens Cash App with the amount pre-filled. You still review and confirm it there — ACTION never
-                      touches this money.
-                    </p>
-                    <a href={payLink} target="_blank" rel="noopener noreferrer" className="mt-4 block">
-                      <Button className="w-full tap-target">Pay via Cash App</Button>
-                    </a>
-                  </>
-                ) : (
-                  <p className="text-sm text-ink-muted">
-                    You owe {formatStake(action.stake_amount)}. Ask your opponent for their Cash App $cashtag to
-                    settle up, or add your own in{" "}
-                    <Link href="/account" className="text-accent underline underline-offset-2">
-                      your account
-                    </Link>{" "}
-                    so future wins are easier to collect.
-                  </p>
-                )
-              ) : (
-                <p className="text-sm text-ink-muted">
-                  Youre owed {formatStake(action.stake_amount)}.{" "}
-                  {winnerLoser.winner.user?.cashtag ? (
-                    <>They can pay ${winnerLoser.winner.user.cashtag} directly.</>
-                  ) : (
-                    <>
-                      Add your Cash App $cashtag in{" "}
-                      <Link href="/account" className="text-accent underline underline-offset-2">
-                        your account
-                      </Link>{" "}
-                      so they have somewhere to send it.
-                    </>
-                  )}
-                </p>
-              )}
-            </CardContent>
-          </Card>
+        {showPaymentCard && winnerLoser && action.stake_amount && viewerPaymentRole && action.payment_status !== "not_applicable" && (
+          <PaymentSettlementCard
+            actionId={action.id}
+            paymentStatus={action.payment_status}
+            viewerRole={viewerPaymentRole}
+            amount={formatStake(action.stake_amount)}
+            winnerName={winnerLoser.winner.user?.display_name?.trim() || "your opponent"}
+            loserName={winnerLoser.loser.user?.display_name?.trim() || "your opponent"}
+            nudgeAvailableAt={nudgeAvailableAt}
+          />
         )}
 
         <p className="mb-5 text-xs leading-relaxed text-ink-faint">{STAKE_DISCLAIMER}</p>

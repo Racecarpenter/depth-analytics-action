@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/settle",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/payment-reminders",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

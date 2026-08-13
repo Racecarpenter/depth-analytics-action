@@ -42,6 +42,7 @@ async function checkSiteGate(request: NextRequest): Promise<NextResponse | null>
 
   if (!secret || !password) return null;
   if (pathname === "/coming-soon") return null;
+  if (pathname.startsWith("/api/")) return null;
 
   const token = request.cookies.get(SITE_GATE_COOKIE)?.value;
   const valid = await isValidGateToken(token, secret);

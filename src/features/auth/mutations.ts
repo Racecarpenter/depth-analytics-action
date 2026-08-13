@@ -8,6 +8,8 @@ import { getSmsProvider } from "@/lib/sms";
 import { APP_NAME, OTP_EXPIRY_MINUTES, OTP_MAX_ATTEMPTS } from "@/lib/constants";
 import { logError } from "@/lib/utils/log-error";
 import { otpVerifySchema, phoneRequestSchema } from "@/lib/validations/auth";
+import { PRICING } from "@/lib/monetization/pricing";
+import { logAnalyticsEvent } from "@/lib/monetization/analytics";
 
 export interface AuthActionResult {
   ok: boolean;
@@ -157,6 +159,26 @@ export async function verifyOtp(rawPhone: string, rawCode: string): Promise<Auth
       return { ok: false, error: "Couldn't create your account. Try again." };
     }
     userId = created.user.id;
+
+    // Starter grant, brand-new users only. The partial unique index on
+    // action_credit_transactions (one starter_grant row per user) makes this
+    // safe to retry — a duplicate insert here is just ignored, not an error.
+    const { error: grantError } = await admin.from("action_credit_transactions").insert({
+      user_id: userId,
+      type: "starter_grant",
+      amount: PRICING.starterFreeActions,
+      reference_type: "system",
+      note: "Starter grant on signup",
+    });
+    if (grantError && grantError.code !== "23505") {
+      logError("[verifyOtp] starter grant insert failed:", grantError);
+    } else if (!grantError) {
+      await logAnalyticsEvent(admin, {
+        eventName: "starter_actions_granted",
+        userId,
+        metadata: { amount: PRICING.starterFreeActions },
+      });
+    }
   }
 
   const supabase = await createClient();

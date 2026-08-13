@@ -5,15 +5,33 @@ import { PageContainer } from "@/components/layout/page-container";
 import { EmptyState } from "@/components/ui/empty-state";
 import { requireUser } from "@/features/auth/session";
 import { ActionBuilder } from "@/features/actions/components/action-builder";
+import { getEntitlementSummary } from "@/features/monetization/queries";
+import { Paywall } from "@/features/monetization/components/paywall";
 import { getSportsDataProvider } from "@/lib/sports-data";
 
 export default async function NewActionForGamePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ gameId: string }>;
+  searchParams: Promise<{ checkout?: string }>;
 }) {
   await requireUser();
   const { gameId } = await params;
+  const { checkout } = await searchParams;
+
+  const entitlement = await getEntitlementSummary();
+  if (!entitlement.canCreateAction) {
+    return (
+      <>
+        <AppHeader />
+        <PageContainer>
+          <BackLink href="/actions/new" label="Search" />
+          <Paywall returnTo={`/actions/new/${gameId}`} justPurchased={checkout === "success"} />
+        </PageContainer>
+      </>
+    );
+  }
 
   const provider = getSportsDataProvider();
   const event = await provider.getEvent(gameId);

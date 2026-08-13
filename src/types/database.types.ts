@@ -47,9 +47,41 @@ export type NotificationType =
   | "action_declined"
   | "action_live"
   | "action_settled"
-  | "action_cancelled";
+  | "action_cancelled"
+  | "referral_reward_earned"
+  | "payment_owed"
+  | "payment_reminder"
+  | "payment_marked_paid"
+  | "payment_confirmed"
+  | "payment_disputed";
 
 export type ChangedByActor = "system" | "creator" | "opponent";
+
+export type PaymentSettlementStatus = "not_applicable" | "owed" | "marked_paid" | "settled" | "disputed";
+
+export type PaymentSettlementEventType =
+  | "owed"
+  | "reminder_6h"
+  | "reminder_24h"
+  | "reminder_48h"
+  | "manual_nudge"
+  | "marked_paid"
+  | "confirmed_received"
+  | "disputed"
+  | "not_applicable";
+
+export type CreditTransactionType =
+  | "starter_grant"
+  | "referral_reward"
+  | "action_pack_purchase"
+  | "action_created"
+  | "admin_adjustment";
+
+export type PurchaseKind = "action_pack" | "action_pass";
+
+export type PurchaseStatus = "completed" | "refunded";
+
+export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 export interface Database {
   public: {
@@ -191,6 +223,7 @@ export interface Database {
           locked_at: string | null;
           resolved_at: string | null;
           cancelled_reason: string | null;
+          payment_status: PaymentSettlementStatus;
           created_at: string;
           updated_at: string;
         };
@@ -207,6 +240,7 @@ export interface Database {
           locked_at?: string | null;
           resolved_at?: string | null;
           cancelled_reason?: string | null;
+          payment_status?: PaymentSettlementStatus;
           created_at?: string;
           updated_at?: string;
         };
@@ -223,6 +257,7 @@ export interface Database {
           locked_at?: string | null;
           resolved_at?: string | null;
           cancelled_reason?: string | null;
+          payment_status?: PaymentSettlementStatus;
           created_at?: string;
           updated_at?: string;
         };
@@ -392,6 +427,48 @@ export interface Database {
           },
         ];
       };
+      payment_settlement_events: {
+        Row: {
+          id: string;
+          action_id: string;
+          event_type: PaymentSettlementEventType;
+          actor_user_id: string | null;
+          metadata: Json;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          action_id: string;
+          event_type: PaymentSettlementEventType;
+          actor_user_id?: string | null;
+          metadata?: Json;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          action_id?: string;
+          event_type?: PaymentSettlementEventType;
+          actor_user_id?: string | null;
+          metadata?: Json;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "payment_settlement_events_action_id_fkey";
+            columns: ["action_id"];
+            isOneToOne: false;
+            referencedRelation: "actions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "payment_settlement_events_actor_user_id_fkey";
+            columns: ["actor_user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       auth_otp_codes: {
         Row: {
           phone: string;
@@ -416,9 +493,307 @@ export interface Database {
         };
         Relationships: [];
       };
+      purchases: {
+        Row: {
+          id: string;
+          user_id: string;
+          kind: PurchaseKind;
+          status: PurchaseStatus;
+          stripe_checkout_session_id: string;
+          stripe_payment_intent_id: string | null;
+          stripe_customer_id: string | null;
+          amount_cents: number;
+          currency: string;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          kind: PurchaseKind;
+          status?: PurchaseStatus;
+          stripe_checkout_session_id: string;
+          stripe_payment_intent_id?: string | null;
+          stripe_customer_id?: string | null;
+          amount_cents: number;
+          currency?: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          kind?: PurchaseKind;
+          status?: PurchaseStatus;
+          stripe_checkout_session_id?: string;
+          stripe_payment_intent_id?: string | null;
+          stripe_customer_id?: string | null;
+          amount_cents?: number;
+          currency?: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "purchases_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      action_passes: {
+        Row: {
+          id: string;
+          user_id: string;
+          started_at: string;
+          expires_at: string;
+          purchase_id: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          started_at?: string;
+          expires_at: string;
+          purchase_id?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          started_at?: string;
+          expires_at?: string;
+          purchase_id?: string | null;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "action_passes_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "action_passes_purchase_id_fkey";
+            columns: ["purchase_id"];
+            isOneToOne: false;
+            referencedRelation: "purchases";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      action_credit_transactions: {
+        Row: {
+          id: string;
+          user_id: string;
+          type: CreditTransactionType;
+          amount: number;
+          reference_type: string | null;
+          reference_id: string | null;
+          note: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          type: CreditTransactionType;
+          amount: number;
+          reference_type?: string | null;
+          reference_id?: string | null;
+          note?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          type?: CreditTransactionType;
+          amount?: number;
+          reference_type?: string | null;
+          reference_id?: string | null;
+          note?: string | null;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "action_credit_transactions_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      referrals: {
+        Row: {
+          id: string;
+          inviter_user_id: string;
+          invitee_phone: string;
+          invitee_user_id: string | null;
+          triggering_action_id: string | null;
+          reward_transaction_id: string | null;
+          reward_granted_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          inviter_user_id: string;
+          invitee_phone: string;
+          invitee_user_id?: string | null;
+          triggering_action_id?: string | null;
+          reward_transaction_id?: string | null;
+          reward_granted_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          inviter_user_id?: string;
+          invitee_phone?: string;
+          invitee_user_id?: string | null;
+          triggering_action_id?: string | null;
+          reward_transaction_id?: string | null;
+          reward_granted_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "referrals_inviter_user_id_fkey";
+            columns: ["inviter_user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "referrals_invitee_user_id_fkey";
+            columns: ["invitee_user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "referrals_triggering_action_id_fkey";
+            columns: ["triggering_action_id"];
+            isOneToOne: false;
+            referencedRelation: "actions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "referrals_reward_transaction_id_fkey";
+            columns: ["reward_transaction_id"];
+            isOneToOne: false;
+            referencedRelation: "action_credit_transactions";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      stripe_webhook_events: {
+        Row: {
+          stripe_event_id: string;
+          event_type: string;
+          payload: Json | null;
+          received_at: string;
+        };
+        Insert: {
+          stripe_event_id: string;
+          event_type: string;
+          payload?: Json | null;
+          received_at?: string;
+        };
+        Update: {
+          stripe_event_id?: string;
+          event_type?: string;
+          payload?: Json | null;
+          received_at?: string;
+        };
+        Relationships: [];
+      };
+      analytics_events: {
+        Row: {
+          id: string;
+          event_name: string;
+          user_id: string | null;
+          action_id: string | null;
+          metadata: Json;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          event_name: string;
+          user_id?: string | null;
+          action_id?: string | null;
+          metadata?: Json;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          event_name?: string;
+          user_id?: string | null;
+          action_id?: string | null;
+          metadata?: Json;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "analytics_events_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "analytics_events_action_id_fkey";
+            columns: ["action_id"];
+            isOneToOne: false;
+            referencedRelation: "actions";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      consume_action_credit_or_pass: {
+        Args: { p_user_id: string; p_action_id: string; p_amount?: number };
+        Returns: { allowed: boolean; method: string; balance_after: number | null }[];
+      };
+      grant_referral_reward_if_eligible: {
+        Args: { p_user_id: string; p_action_id: string; p_reward_amount: number };
+        Returns: { granted: boolean; inviter_user_id: string | null }[];
+      };
+      settlement_mark_owed: {
+        Args: { p_action_id: string };
+        Returns: { ok: boolean }[];
+      };
+      settlement_mark_not_applicable: {
+        Args: { p_action_id: string };
+        Returns: { ok: boolean }[];
+      };
+      settlement_mark_paid: {
+        Args: { p_action_id: string; p_actor_user_id: string };
+        Returns: { ok: boolean; error: string | null }[];
+      };
+      settlement_confirm_received: {
+        Args: { p_action_id: string; p_actor_user_id: string };
+        Returns: { ok: boolean; error: string | null }[];
+      };
+      settlement_dispute: {
+        Args: { p_action_id: string; p_actor_user_id: string };
+        Returns: { ok: boolean; error: string | null }[];
+      };
+      settlement_record_reminder: {
+        Args: { p_action_id: string; p_event_type: PaymentSettlementEventType };
+        Returns: { sent: boolean }[];
+      };
+      settlement_record_nudge: {
+        Args: { p_action_id: string; p_actor_user_id: string };
+        Returns: { ok: boolean; error: string | null; next_available_at: string | null }[];
+      };
+    };
     Enums: {
       league: League;
       game_status: GameStatus;
@@ -428,6 +803,11 @@ export interface Database {
       participant_status: ParticipantStatus;
       notification_type: NotificationType;
       changed_by_actor: ChangedByActor;
+      credit_transaction_type: CreditTransactionType;
+      purchase_kind: PurchaseKind;
+      purchase_status: PurchaseStatus;
+      payment_settlement_status: PaymentSettlementStatus;
+      payment_settlement_event_type: PaymentSettlementEventType;
     };
     CompositeTypes: Record<string, never>;
   };
@@ -439,3 +819,7 @@ export type TablesInsert<T extends keyof Database["public"]["Tables"]> =
   Database["public"]["Tables"][T]["Insert"];
 export type TablesUpdate<T extends keyof Database["public"]["Tables"]> =
   Database["public"]["Tables"][T]["Update"];
+export type FunctionArgs<T extends keyof Database["public"]["Functions"]> =
+  Database["public"]["Functions"][T]["Args"];
+export type FunctionReturns<T extends keyof Database["public"]["Functions"]> =
+  Database["public"]["Functions"][T]["Returns"];

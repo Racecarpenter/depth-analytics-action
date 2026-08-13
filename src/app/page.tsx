@@ -10,14 +10,17 @@ import { getActionsForCurrentUser } from "@/features/actions/queries";
 import { findParticipant, personalStatus } from "@/features/actions/types";
 import { getRecentNotifications } from "@/features/notifications/queries";
 import { NotificationBell } from "@/features/notifications/components/notification-bell";
+import { BalanceBadge } from "@/features/monetization/components/balance-badge";
+import { getEntitlementSummary } from "@/features/monetization/queries";
 import { STATUS_GROUPS } from "@/lib/constants";
 import type { ActionStatus } from "@/types/database.types";
 
 export default async function HomePage() {
   const user = await requireUser();
-  const [actions, notifications] = await Promise.all([
+  const [actions, notifications, entitlement] = await Promise.all([
     getActionsForCurrentUser(),
     getRecentNotifications(),
+    getEntitlementSummary(),
   ]);
 
   const byGroup = (statuses: ActionStatus[]) =>
@@ -62,6 +65,9 @@ export default async function HomePage() {
               Create Action
             </Button>
           </Link>
+          <div className="mt-2 text-center">
+            <BalanceBadge entitlement={entitlement} />
+          </div>
         </div>
 
         {!hasAnyActions ? (

@@ -1,5 +1,6 @@
 "use server";
 
+import crypto from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { getCurrentUser } from "@/features/auth/session";
 import { createNotification } from "@/features/notifications/lib/notify";
@@ -10,6 +11,9 @@ import { APP_NAME } from "@/lib/constants";
 import { logError } from "@/lib/utils/log-error";
 import { normalizePhone } from "@/lib/utils/phone";
 import { createActionSchema } from "@/lib/validations/action";
+import { consumeActionCreditOrPass, grantReferralRewardIfEligible, refundActionCredit } from "@/features/monetization/lib/credits";
+import { logAnalyticsEvent } from "@/lib/monetization/analytics";
+import { PRICING } from "@/lib/monetization/pricing";
 import { recordStatusChange } from "./lib/status-history";
 import { createInviteToken, inviteUrl, verifyInviteToken } from "./lib/signed-token";
 import { syncGameFromEvent } from "./lib/sync-game";
@@ -18,7 +22,16 @@ export interface ActionMutationResult {
   ok: boolean;
   error?: string;
   actionId?: string;
+  paywallRequired?: boolean;
 }
+
+/**
+ * Thrown for any failure inside createActionAndInvite's write sequence once
+ * a credit/pass has already been consumed, so a single catch block can
+ * decide whether a compensating refund is needed instead of duplicating
+ * that logic at every early-return site.
+ */
+class ActionCreationFailedError extends Error {}
 
 /**
  * Creates an Action and its invite in one step. There's no persisted
@@ -80,12 +93,31 @@ export async function createActionAndInvite(input: {
 
   const admin = createAdminClient();
 
+  // Authorization gate: creating an Action is the only thing that's ever
+  // monetized (see src/lib/monetization/pricing.ts). Everything above this
+  // point — validation, lookups — must never consume anything, since
+  // abandoning the flow or hitting an error before this line shouldn't cost
+  // the user an Action. actionId is generated client-side (server-side,
+  // despite the name — "client" here means "the caller of the RPC") so the
+  // ledger row referencing it and the `actions` row itself can share one id
+  // without a chicken-and-egg insert order.
+  const actionId = crypto.randomUUID();
+  const consumeResult = await consumeActionCreditOrPass(currentUser.id, actionId);
+  if (!consumeResult.allowed) {
+    return {
+      ok: false,
+      error: "You've used your free Actions. Buy more or invite a friend to earn one.",
+      paywallRequired: true,
+    };
+  }
+
   try {
     const game = await syncGameFromEvent(admin, event, provider.name);
 
     const { data: action, error: actionError } = await admin
       .from("actions")
       .insert({
+        id: actionId,
         creator_id: currentUser.id,
         game_id: game.id,
         market: parsed.data.market,
@@ -97,7 +129,7 @@ export async function createActionAndInvite(input: {
       .single();
 
     if (actionError || !action) {
-      return { ok: false, error: "Couldn't create the Action. Try again." };
+      throw new ActionCreationFailedError("Couldn't create the Action. Try again.");
     }
 
     const { data: opponentUser } = await admin
@@ -105,6 +137,21 @@ export async function createActionAndInvite(input: {
       .select("id")
       .eq("phone", opponentPhone)
       .maybeSingle();
+
+    // First-touch referral attribution: if this phone number isn't an
+    // Action user yet, record that this creator invited them. Best-effort
+    // and non-blocking — a failure here should never sink Action creation.
+    // ignoreDuplicates means whoever invited this number first keeps
+    // attribution; this insert is then a no-op.
+    if (!opponentUser?.id) {
+      const { error: referralError } = await admin
+        .from("referrals")
+        .upsert(
+          { inviter_user_id: currentUser.id, invitee_phone: opponentPhone },
+          { onConflict: "invitee_phone", ignoreDuplicates: true },
+        );
+      if (referralError) logError("[createActionAndInvite] referral upsert failed:", referralError);
+    }
 
     await admin.from("participants").insert({
       action_id: action.id,
@@ -133,7 +180,7 @@ export async function createActionAndInvite(input: {
       .single();
 
     if (participantError || !opponentParticipant) {
-      return { ok: false, error: "Couldn't invite that number. Try again." };
+      throw new ActionCreationFailedError("Couldn't invite that number. Try again.");
     }
 
     const token = createInviteToken(action.id, opponentParticipant.id);
@@ -156,11 +203,30 @@ export async function createActionAndInvite(input: {
       });
     }
 
+    const { count: actionsCreatedCount } = await admin
+      .from("actions")
+      .select("id", { count: "exact", head: true })
+      .eq("creator_id", currentUser.id);
+
+    await logAnalyticsEvent(admin, {
+      eventName: "action_created",
+      userId: currentUser.id,
+      actionId: action.id,
+      metadata: {
+        paid_via: consumeResult.method,
+        nth_action: actionsCreatedCount ?? null,
+      },
+    });
+
     revalidatePath("/");
     return { ok: true, actionId: action.id };
   } catch (err) {
+    if (consumeResult.method === "credit") {
+      await refundActionCredit(currentUser.id, `Refund: Action creation failed (${actionId})`);
+    }
+    const message = err instanceof ActionCreationFailedError ? err.message : "Something went wrong creating that Action. Try again.";
     logError("[createActionAndInvite] failed:", err);
-    return { ok: false, error: "Something went wrong creating that Action. Try again." };
+    return { ok: false, error: message };
   }
 }
 
@@ -244,6 +310,20 @@ export async function respondToInvite(
       type: "action_accepted",
       title: "Action accepted",
       body: "Your challenge was accepted. It's locked in.",
+    });
+  }
+
+  // Referral reward: fires the first time this user has ever accepted an
+  // Action, regardless of whether it was this specific invite that brought
+  // them in. Best-effort — never blocks the accept itself.
+  const referralGrant = await grantReferralRewardIfEligible(currentUser.id, action.id, PRICING.referralRewardActions);
+  if (referralGrant.granted && referralGrant.inviterUserId) {
+    await createNotification(admin, {
+      userId: referralGrant.inviterUserId,
+      actionId: action.id,
+      type: "referral_reward_earned",
+      title: "+1 Action",
+      body: `${currentUser.display_name ?? "Someone you invited"} joined ${APP_NAME}.`,
     });
   }
 

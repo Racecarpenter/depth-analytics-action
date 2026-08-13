@@ -16,7 +16,10 @@ export const config = {
      * Match all request paths except:
      * - static files, images, favicon
      * - the settlement cron API route (auth'd separately via CRON_SECRET)
+     * - the Stripe webhook route (auth'd separately via signature
+     *   verification — Stripe can't complete a login or a coming-soon
+     *   password gate, so it must never be redirected)
      */
-    "/((?!_next/static|_next/image|favicon.ico|api/cron|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|api/cron|api/webhooks|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

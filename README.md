@@ -33,7 +33,9 @@ src/
     actions/new/[gameId]/       Market + side + stake + invite
     actions/[actionId]/         Action detail (immutable once accepted)
     invite/[token]/             Invite accept/decline (works signed-out)
-    api/cron/settle/            Settlement job (Vercel Cron hits this)
+    api/cron/settle/            Settlement job — grades the sports result (Vercel Cron hits this)
+    api/cron/payment-reminders/  Payment nag job — separate from settlement, see "Payment settlement" below
+    api/webhooks/stripe/        Stripe webhook — the only source of truth for purchase fulfillment
 
   features/                One folder per domain area. Each owns its queries,
                             mutations (Server Actions), and components.
@@ -41,11 +43,16 @@ src/
     games/                    Search wrapper around SportsDataProvider
     actions/                   The core "Action" (challenge) entity
     notifications/              In-app notifications
+    monetization/                Action credits, referrals, paywall UI, Stripe checkout — see "Monetization" below
+    settlement/                  Payment settlement state machine, PaymentSettlementCard — see "Payment settlement" below
 
   lib/
     supabase/                client.ts (browser) / server.ts (RLS-scoped) / admin.ts (service role)
     sms/                     SmsProvider interface + mock + Twilio implementations
     sports-data/              SportsDataProvider interface + mock + The Odds API implementations
+    stripe/                   Cached Stripe client singleton
+    monetization/              pricing.ts (single source of truth for all prices/quantities), analytics.ts
+    settlement/                 copy.ts (playful reminder/nudge copy bank), reminder-schedule.ts (6h/24h/48h config)
     validations/              Zod schemas
     utils/                    Small, boring helpers (phone, currency, odds, date, cn)
 
@@ -82,7 +89,9 @@ npx supabase db push        # runs supabase/migrations/*.sql
 psql "$(npx supabase db remote-commit-url 2>/dev/null || true)" # optional
 ```
 
-Or simpler, paste `supabase/migrations/0001_init.sql`, `0002_auth_otp.sql`, and `0004_cashtag.sql` (in that order) into the Supabase SQL editor, then `supabase/seed.sql`. Skip `0003_fix_rls_recursion.sql` on a fresh project — its fix is already baked into `0001_init.sql`; `0003` only exists to patch a project that was set up before that fix landed.
+Or simpler, paste `supabase/migrations/0001_init.sql`, `0002_auth_otp.sql`, `0004_cashtag.sql`, `0005_monetization.sql`, `0006_referral_notification.sql`, `0007_payment_settlement.sql`, and `0008_payment_notification_types.sql` (in that order) into the Supabase SQL editor, then `supabase/seed.sql`. Skip `0003_fix_rls_recursion.sql` on a fresh project — its fix is already baked into `0001_init.sql`; `0003` only exists to patch a project that was set up before that fix landed.
+
+`0006_referral_notification.sql` and `0008_payment_notification_types.sql` each add enum values (`ALTER TYPE ... ADD VALUE`) and must run as their own statement, not batched with other DDL in the same transaction — running each migration file separately (which both options above already do) satisfies this automatically.
 
 **Option B — Supabase SQL editor**
 
@@ -111,6 +120,9 @@ cp .env.example .env.local
 | `SMS_PROVIDER` | `mock` for local dev (default) |
 | `SPORTS_DATA_PROVIDER` | `mock` for local dev (default) |
 | `SITE_PASSWORD` / `SITE_GATE_SECRET` | Optional. Leave both blank locally. See "Site-wide password gate" below. |
+| `STRIPE_SECRET_KEY` | Stripe → Developers → API keys. Use a test-mode key locally. |
+| `STRIPE_WEBHOOK_SECRET` | Stripe → Developers → Webhooks (production) or printed by `stripe listen` (local). See "Monetization" below. |
+| `STRIPE_PRICE_ACTION_PACK` / `STRIPE_PRICE_ACTION_PASS` | Price IDs from Stripe → Product catalog. See "Monetization" below. |
 
 ### 5. Run it
 
@@ -150,18 +162,90 @@ Nothing else changes — `src/lib/sms/index.ts` is the only place that reads `SM
 
 ---
 
-## Settling up (Cash App)
+## Payment settlement
 
-ACTION never holds or moves money — the hard constraint from day one. What it does instead: each user can optionally save a Cash App `$cashtag` on their `/account` page. Once an Action settles, the Action detail page (and, if a phone number is on file, a settlement text) shows the losing side a **"Pay via Cash App"** button that deep-links to `https://cash.app/$cashtag/<amount>` with the stake pre-filled. Tapping it opens Cash App itself — the user reviews and confirms the payment there. ACTION's role stops at generating that link; it never sees the transaction, never touches an API key for money movement, and needs no money-transmitter license because of it.
+ACTION never holds or moves money — the hard constraint from day one. As of this feature, it also doesn't facilitate the transfer itself in any way (no deep links, no payment provider integration in the active flow — see "Cash App (dormant)" below for what changed and why). What it tracks instead is a **social settlement status**, deliberately kept separate from the sports result: whether the bet won is one fact (`actions.status`); whether the loser says they've paid is a completely different one (`actions.payment_status`). A push or a cancelled Action always has `payment_status = 'not_applicable'` — nobody owes anything, so no reminders ever fire for it.
 
-Relevant code:
+**State machine** (`payment_settlement_status`):
 
-- `src/lib/utils/cash-app.ts` — builds the deep link from a cashtag + amount.
-- `src/features/account/` — the `/account` page and `updateCashtag` server action, validated by `src/lib/validations/account.ts` (`$` prefix, 1–20 alphanumeric/underscore characters, per Cash App's own `$cashtag` rules).
-- `src/app/actions/[actionId]/page.tsx` — the "Settle up" card shown once an Action has a winner and loser.
-- `src/app/api/cron/settle/route.ts` — after grading an Action, if the winner has a cashtag and the loser has a phone on file, texts the loser the pay link through the same `SmsProvider` abstraction used for invites (best-effort — a failed text never blocks settlement itself).
+```
+not_applicable                         (default; terminal — pushes/cancels/expires)
+owed → marked_paid → settled           (terminal)
+              ↘ disputed → settled     (winner can confirm directly once resolved off-app)
+```
 
-If you want real automated transfers instead of a tap-to-confirm link, see `PATH_TO_PRODUCTION.md` for why that requires becoming a licensed money transmitter (or partnering with one) and is out of scope for this MVP.
+Every transition happens inside a `SECURITY DEFINER` Postgres function (`supabase/migrations/0007_payment_settlement.sql`) that takes a per-Action advisory lock, checks the caller's role (loser can mark paid, only the winner can confirm/dispute/nudge), checks the current state is valid for that transition, and logs an immutable event row — `payment_settlement_events` is the append-only audit trail this whole feature (and eventually a Rivalry/Recap feature) reads from. Nothing writes to `payment_status` or that table directly from application code.
+
+**The loop, once an Action resolves with a winner and loser:**
+
+1. The settlement cron (`/api/cron/settle`) grades the sports result as before, then calls `settlement_mark_owed` if there's a stake — this fires a "Well, shit, you owe X" / "You got him, X owes you" notification pair, separate from the existing win/loss result notification.
+2. The loser taps **Mark as Paid** (or **I need a minute**, which does nothing server-side — just a beat of humor) → `payment_status` becomes `marked_paid`, winner is notified.
+3. The winner taps **Confirm Received** (→ `settled`) or **Didn't Receive It** (→ `disputed`, shown as a neutral "Payment not confirmed" to both sides — ACTION doesn't adjudicate; the winner can still confirm later once it's sorted out between them).
+
+**Automatic reminders**, via a second cron (`/api/cron/payment-reminders`, same 5-minute cadence as `/api/cron/settle` — see `vercel.json`): while `payment_status = 'owed'`, sends one playful nudge at 6h, 24h, and 48h after the Action resolved, then stops for good. Each level fires at most once per Action (enforced by a partial unique index, so an overlapping cron run can't double-send) and only the highest threshold crossed goes out on any given run, so a missed run doesn't burst-send several at once. Change the hours in `src/lib/settlement/reminder-schedule.ts` — nothing else hard-codes them.
+
+**Manual nudges**: the winner can also tap **Nudge** any time payment is owed, rate-limited to one per 12 hours per Action (enforced in `settlement_record_nudge`, not just in the UI). On cooldown the button shows "Next nudge available in Xh" instead of erroring silently.
+
+**Copy**: every reminder/nudge line is picked randomly from a small pool in `src/lib/settlement/copy.ts`, along with the "Well, shit"/"You got him" result copy and the mark-paid/confirmed/disputed notification text. Edit or add lines there — nothing settlement-related is hard-coded at any call site. All in-app only for now (uses the existing `notifications` table/bell, not SMS) — the reminder *event* and the delivery *channel* are kept as separate concepts specifically so a later change (e.g. SMS for the 48h level) doesn't require touching any settlement logic.
+
+**Future-proofing**: no reputation/rivalry UI is built yet, but every timestamp a future "Race vs. Mike, 42–37, all debts settled ✓" feature would need is already being recorded — `payment_settlement_events` per Action, `actions.resolved_at` as the "became owed" moment, `actions.status` + `stake_amount` for win/loss/amount math. That data can be aggregated later without another migration.
+
+Relevant code: `supabase/migrations/0007_payment_settlement.sql` (schema + RPCs), `0008_payment_notification_types.sql` (new notification enum values), `src/features/settlement/` (mutations, RPC wrappers, the `PaymentSettlementCard` component), `src/lib/settlement/` (copy bank, reminder schedule config), `src/app/api/cron/payment-reminders/route.ts`.
+
+### Cash App (dormant)
+
+The previous version of this feature deep-linked the loser straight to `cash.app/$cashtag/<amount>` to actually initiate payment. That's been removed from the active flow — Action now only tracks whether participants *say* they've paid, never facilitates the transfer itself. The old code wasn't deleted, since it was already cleanly isolated: `src/lib/utils/cash-app.ts` (the pure link-builder), the `cashtag` column on `users`, and `src/features/account/` (the `updateCashtag` mutation + `CashtagForm` component) are all still in the repo, just no longer called from anywhere. To restore it: re-add the `<CashtagForm>` card to `/account`'s page, and re-add a call to `buildCashAppPayLink()` wherever you want the pay link surfaced again (it previously lived in the settlement cron and on the Action detail page).
+
+If you want real automated transfers instead, see `PATH_TO_PRODUCTION.md` for why that requires becoming a licensed money transmitter (or partnering with one) and is out of scope for this MVP.
+
+---
+
+## Monetization (Action credits, referrals, Stripe)
+
+**Accepting an Action is always free.** The only thing ACTION ever charges for is *creating* a new Action — receiving, accepting, declining, and viewing Actions never cost anything and never check entitlement. This is a completely separate concept from the Cash App settle-up flow above: Stripe payments here buy access to the app itself, never a stake, and ACTION still never holds, moves, or escrows wager money.
+
+### How it works
+
+- **Free tier** — every new user gets 3 free Action creations for life (not monthly), granted once on signup (`verifyOtp` in `src/features/auth/mutations.ts`).
+- **Referrals** — invite someone who isn't on ACTION yet; once they create an account and accept their *first* Action (any Action, not necessarily the one they were invited to), the inviter gets +1 free Action. First-touch attribution: whoever invites a phone number first keeps it, enforced by a unique constraint, not app logic.
+- **Action Pack** — one-time purchase, +5 Action credits, no expiration.
+- **30-Day Action Pass** — one-time purchase, unlimited Action creation for 30 days. Not a subscription — no auto-renewal, no recurring charge. While active, creating Actions doesn't touch stored credits.
+- **Ledger, not a counter** — `action_credit_transactions` is an append-only table (`starter_grant`, `referral_reward`, `action_pack_purchase`, `action_created`, `admin_adjustment`); the current balance is always `sum(amount)`, never a stored/mutable field. This is deliberate, for auditability — you can always reconstruct exactly why a user has the balance they have.
+- **Authorization is server-side and race-safe** — every Action creation calls the `consume_action_credit_or_pass` Postgres function (`supabase/migrations/0005_monetization.sql`), which takes an advisory lock per user before checking for an active pass or spending a credit. Two simultaneous requests from a user with exactly one credit cannot both succeed.
+- **Stripe is fulfillment-by-webhook only** — reaching the Checkout success URL never grants anything by itself; only a verified `checkout.session.completed` webhook event does (`src/app/api/webhooks/stripe/route.ts`). Both an event-id dedup table and a unique constraint on the Checkout Session ID make replayed webhooks safe to re-deliver.
+
+### Changing pricing later
+
+Everything — free-tier size, referral reward, pack size/price, pass duration/price — lives in one file: `src/lib/monetization/pricing.ts`. Change a number there and the paywall UI, checkout amounts (once you also update the matching Stripe Price, see below), and copy all follow. Nothing else in the codebase hard-codes these values.
+
+Note that changing `priceCents` in `pricing.ts` alone does **not** change what Stripe actually charges — Stripe Prices are immutable once created. To change an amount, create a new Price on the existing Product in Stripe, update `STRIPE_PRICE_ACTION_PACK`/`STRIPE_PRICE_ACTION_PASS` to the new Price ID, and update `priceDisplay`/`priceCents` in `pricing.ts` to match (the display value isn't read from Stripe — keep the two in sync by hand).
+
+### Stripe setup
+
+1. Create a Stripe account (or use an existing one) and switch to **test mode** for development.
+2. Developers → API keys → copy the **Secret key** into `STRIPE_SECRET_KEY`.
+3. Product catalog → create two products, each with one one-time (not recurring) Price:
+   - "5 Actions" — $1.99 USD, one-time.
+   - "30-Day Action Pass" — $3.99 USD, one-time.
+4. Copy each Price's ID (`price_...`, not the Product ID) into `STRIPE_PRICE_ACTION_PACK` and `STRIPE_PRICE_ACTION_PASS`.
+5. Repeat steps 3–4 in **live mode** with real prices before taking real payments, and use live-mode keys/price IDs in Vercel's production environment variables.
+
+### Webhook setup
+
+**Local development** — use the Stripe CLI to forward events to your dev server:
+
+```bash
+stripe login
+stripe listen --forward-to localhost:3000/api/webhooks/stripe
+```
+
+`stripe listen` prints a webhook signing secret (`whsec_...`) each time it starts — copy that into `STRIPE_WEBHOOK_SECRET` in `.env.local` and restart `npm run dev`. Trigger a test purchase end to end with Stripe's test card `4242 4242 4242 4242`, any future expiry, any CVC.
+
+**Production (Vercel)** — Stripe dashboard → Developers → Webhooks → Add endpoint:
+- Endpoint URL: `https://<your-domain>/api/webhooks/stripe`
+- Events to send: `checkout.session.completed`
+
+After creating it, copy that endpoint's **Signing secret** into `STRIPE_WEBHOOK_SECRET` as a Vercel production environment variable, then redeploy.
 
 ---
 
@@ -188,7 +272,7 @@ This means the **Phone** provider must be turned on for your Supabase project �
 
 ## Database
 
-Seven domain tables (`supabase/migrations/0001_init.sql`): `users`, `teams`, `games`, `actions`, `participants`, `action_status_history`, `notifications`. One supporting table (`0002_auth_otp.sql`): `auth_otp_codes`, used only by the phone-auth flow above. `0004_cashtag.sql` adds a nullable `cashtag` column to `users` for the settle-up feature below.
+Seven domain tables (`supabase/migrations/0001_init.sql`): `users`, `teams`, `games`, `actions`, `participants`, `action_status_history`, `notifications`. One supporting table (`0002_auth_otp.sql`): `auth_otp_codes`, used only by the phone-auth flow above. `0004_cashtag.sql` adds a nullable `cashtag` column to `users`, now dormant (see "Cash App (dormant)" above). `0005_monetization.sql` adds six more: `purchases`, `action_passes`, `action_credit_transactions`, `referrals`, `stripe_webhook_events`, `analytics_events` — see "Monetization" above. `0006_referral_notification.sql` adds one enum value for the referral-reward notification. `0007_payment_settlement.sql` adds `actions.payment_status` and the `payment_settlement_events` table — see "Payment settlement" above. `0008_payment_notification_types.sql` adds five enum values for payment notifications.
 
 RLS is enabled on every table. Reads from Server Components go through the RLS-scoped client (`src/lib/supabase/server.ts`) and are limited to rows the signed-in user is actually a participant on. Writes that need to reach across users (e.g. creating a participant row for a phone number with no account yet, or the settlement cron updating someone else's Action) go through the service-role client (`src/lib/supabase/admin.ts`) from trusted server code that does its own authorization checks first — that client is marked `server-only` so it can't accidentally end up in a browser bundle.
 
@@ -197,10 +281,11 @@ RLS is enabled on every table. Reads from Server Components go through the RLS-s
 ## Deploying to Vercel
 
 1. Push this repo to GitHub/GitLab/Bitbucket and import it in Vercel.
-2. Add all the environment variables from `.env.example` in Project Settings → Environment Variables (use production values — a production Supabase project, `SMS_PROVIDER=twilio` if you're ready, a real `NEXT_PUBLIC_APP_URL`).
-3. `vercel.json` already defines the settlement cron (`/api/cron/settle`, every 5 minutes). Once `CRON_SECRET` is set as an env var, Vercel automatically sends it as the cron request's `Authorization` header — no extra setup.
-4. Run the migration files against your production Supabase project — `0001_init.sql`, `0002_auth_otp.sql`, `0004_cashtag.sql` (SQL editor or `supabase db push`), then `supabase/seed.sql` for team reference data. Only run `0003_fix_rls_recursion.sql` too if this project was already migrated before that fix landed in `0001`.
-5. Deploy.
+2. Add all the environment variables from `.env.example` in Project Settings → Environment Variables (use production values — a production Supabase project, `SMS_PROVIDER=twilio` if you're ready, a real `NEXT_PUBLIC_APP_URL`, live-mode Stripe keys/price IDs).
+3. `vercel.json` already defines both cron jobs — settlement grading (`/api/cron/settle`) and payment reminders (`/api/cron/payment-reminders`), both every 5 minutes. Once `CRON_SECRET` is set as an env var, Vercel automatically sends it as each cron request's `Authorization` header — no extra setup.
+4. Run the migration files against your production Supabase project, in order — `0001_init.sql`, `0002_auth_otp.sql`, `0004_cashtag.sql`, `0005_monetization.sql`, `0006_referral_notification.sql`, `0007_payment_settlement.sql`, `0008_payment_notification_types.sql` (SQL editor or `supabase db push`), then `supabase/seed.sql` for team reference data. Only run `0003_fix_rls_recursion.sql` too if this project was already migrated before that fix landed in `0001`.
+5. Create the Stripe webhook endpoint (see "Monetization" → "Webhook setup" above) pointing at your production domain, and set `STRIPE_WEBHOOK_SECRET` to that endpoint's signing secret.
+6. Deploy.
 
 ---
 

@@ -1,15 +1,15 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getSmsProvider } from "@/lib/sms";
 import { getSportsDataProvider } from "@/lib/sports-data";
-import { APP_NAME } from "@/lib/constants";
-import { buildCashAppPayLink } from "@/lib/utils/cash-app";
 import { gradeSelection } from "@/features/actions/lib/settlement";
 import { recordStatusChange } from "@/features/actions/lib/status-history";
 import { syncGameFromEvent } from "@/features/actions/lib/sync-game";
 import { getWinnerLoser, personalStatus } from "@/features/actions/types";
 import type { ActionWithDetails } from "@/features/actions/types";
 import { notifyParticipants } from "@/features/notifications/lib/notify";
+import { markActionNotApplicable, markActionOwed } from "@/features/settlement/lib/rpc";
+import { RESULT_COPY } from "@/lib/settlement/copy";
+import { formatStake } from "@/lib/utils/currency";
 
 export const dynamic = "force-dynamic";
 
@@ -56,6 +56,7 @@ export async function GET(request: NextRequest) {
     await admin.from("participants").update({ invite_token: null }).eq("id", opponent.id);
     await recordStatusChange(admin, action.id, "pending", "expired", "system", "Invite window closed unanswered.");
     await notifyParticipants(admin, action, "action_cancelled", "Invite expired", () => "Nobody responded in time, so this Action expired.");
+    await markActionNotApplicable(action.id);
     summary.expired += 1;
   }
 
@@ -104,6 +105,7 @@ export async function GET(request: NextRequest) {
           .eq("id", action.id);
         await recordStatusChange(admin, action.id, action.status, "cancelled", "system", `Game ${event.status}.`);
         await notifyParticipants(admin, action, "action_cancelled", "Action cancelled", () => `${game.away_team.abbreviation} @ ${game.home_team.abbreviation} was ${event.status}.`);
+        await markActionNotApplicable(action.id);
         summary.cancelled += 1;
       }
       continue;
@@ -140,24 +142,45 @@ export async function GET(request: NextRequest) {
       });
       summary.settled += 1;
 
-      // If someone owes money and the winner has a Cash App $cashtag on
-      // file, text the loser a tap-to-pay link. Best-effort only — ACTION
-      // never touches the money itself, so a failure here never blocks
-      // settlement above.
-      const winnerLoser = getWinnerLoser({ status: grade, participants: action.participants });
-      if (winnerLoser && action.stake_amount && winnerLoser.winner.user?.cashtag && winnerLoser.loser.phone) {
-        const payLink = buildCashAppPayLink(
-          winnerLoser.winner.user.cashtag,
-          action.stake_amount,
-          `${game.away_team.abbreviation}@${game.home_team.abbreviation} — ${APP_NAME}`,
-        );
-        try {
-          await getSmsProvider().send({
-            to: winnerLoser.loser.phone,
-            body: `${APP_NAME}: You lost the ${game.away_team.abbreviation}@${game.home_team.abbreviation} Action. You owe $${action.stake_amount.toFixed(2)} — pay $${winnerLoser.winner.user.cashtag} here: ${payLink}`,
-          });
-        } catch (smsErr) {
-          console.error(`[cron/settle] pay-link SMS failed for action ${action.id}:`, smsErr);
+      // Payment settlement is a separate concern from the sports result
+      // above — whether Mike covered the spread is not the same fact as
+      // whether he's paid up. A push never owes anyone anything; a
+      // won/lost Action with a stake becomes "owed" and gets its own
+      // notification alongside (not instead of) the result notification
+      // above. ACTION still never touches any money here — this only
+      // records what the app believes is owed and notifies the two
+      // participants.
+      if (grade === "push") {
+        await markActionNotApplicable(action.id);
+      } else if (action.stake_amount) {
+        const becameOwed = await markActionOwed(action.id);
+        if (becameOwed) {
+          const winnerLoser = getWinnerLoser({ status: grade, participants: action.participants });
+          if (winnerLoser) {
+            const amount = formatStake(action.stake_amount);
+            const winnerName = winnerLoser.winner.user?.display_name?.trim() || "your opponent";
+            const loserName = winnerLoser.loser.user?.display_name?.trim() || "your opponent";
+            if (winnerLoser.loser.user_id) {
+              const { title, body } = RESULT_COPY.loserOwes(winnerName, amount);
+              await admin.from("notifications").insert({
+                user_id: winnerLoser.loser.user_id,
+                action_id: action.id,
+                type: "payment_owed",
+                title,
+                body,
+              });
+            }
+            if (winnerLoser.winner.user_id) {
+              const { title, body } = RESULT_COPY.winnerOwed(loserName, amount);
+              await admin.from("notifications").insert({
+                user_id: winnerLoser.winner.user_id,
+                action_id: action.id,
+                type: "payment_owed",
+                title,
+                body,
+              });
+            }
+          }
         }
       }
     }

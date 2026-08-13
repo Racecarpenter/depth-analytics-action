@@ -43,6 +43,13 @@ export function ActionBuilder({ event, markets }: { event: SportsEvent; markets:
         opponentPhone: phone,
       });
       if (!result.ok) {
+        if (result.paywallRequired) {
+          // The server-rendered parent page re-checks entitlement on every
+          // request and renders <Paywall> instead of this component once
+          // canCreateAction is false — refreshing is enough to swap to it.
+          router.refresh();
+          return;
+        }
         setError(result.error ?? "Something went wrong.");
         return;
       }
