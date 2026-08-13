@@ -160,16 +160,30 @@ export async function verifyOtp(rawPhone: string, rawCode: string): Promise<Auth
     }
     userId = created.user.id;
 
+    // Upsert (not just update) so this also backfills/repairs a public.users
+  // row that's missing or has a stale phone format — keyed by id, which is
+  // never affected by phone formatting.
+  const { error: upsertError } = await admin
+    .from("users")
+    .upsert({ id: userId, phone, phone_verified_at: new Date().toISOString() }, { onConflict: "id" });
+  if (upsertError) {
+    logError("[verifyOtp] users upsert failed:", upsertError);
+    return { ok: false, error: "Couldn't finish creating your account. Try again." };
+  }
+
     // Starter grant, brand-new users only. The partial unique index on
     // action_credit_transactions (one starter_grant row per user) makes this
     // safe to retry — a duplicate insert here is just ignored, not an error.
-    const { error: grantError } = await admin.from("action_credit_transactions").insert({
-      user_id: userId,
-      type: "starter_grant",
-      amount: PRICING.starterFreeActions,
-      reference_type: "system",
-      note: "Starter grant on signup",
-    });
+    const { error: grantError } = await admin
+      .from("action_credit_transactions")
+      .insert({
+        user_id: userId,
+        type: "starter_grant",
+        amount: PRICING.starterFreeActions,
+        reference_type: "system",
+        note: "Starter grant on signup",
+      });
+      
     if (grantError && grantError.code !== "23505") {
       logError("[verifyOtp] starter grant insert failed:", grantError);
     } else if (!grantError) {
@@ -186,16 +200,6 @@ export async function verifyOtp(rawPhone: string, rawCode: string): Promise<Auth
   if (signInError) {
     logError("[verifyOtp] signInWithPassword failed:", signInError);
     return { ok: false, error: "Couldn't sign you in. Try again." };
-  }
-
-  // Upsert (not just update) so this also backfills/repairs a public.users
-  // row that's missing or has a stale phone format — keyed by id, which is
-  // never affected by phone formatting.
-  const { error: upsertError } = await admin
-    .from("users")
-    .upsert({ id: userId, phone, phone_verified_at: new Date().toISOString() }, { onConflict: "id" });
-  if (upsertError) {
-    logError("[verifyOtp] users upsert failed:", upsertError);
   }
 
   return { ok: true, phone };

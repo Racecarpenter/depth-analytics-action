@@ -9,7 +9,10 @@ import type { Database } from "@/types/database.types";
 const SETTLEMENT_SELECT = `
   *,
   game:games(*, home_team:teams!games_home_team_id_fkey(*), away_team:teams!games_away_team_id_fkey(*)),
-  participants(*, user:users(id, display_name, cashtag))
+  participants!participants_action_id_fkey(
+  *,
+  user:users(id, display_name, cashtag)
+)
 `;
 
 export async function getActionForSettlement(
@@ -43,7 +46,12 @@ export async function getObligationContext(
 ): Promise<ObligationContext | null> {
   const { data } = await admin
     .from("settlement_obligations")
-    .select(`id, action_id, amount, debtor_participant_id, creditor_participant_id, action:actions(participants(*, user:users(id, display_name, cashtag)))`)
+    .select(`id, action_id, amount, debtor_participant_id, creditor_participant_id, action:actions(
+  participants!participants_action_id_fkey(
+    *,
+    user:users(id, display_name, cashtag)
+  )
+)`)
     .eq("id", obligationId)
     .maybeSingle();
 

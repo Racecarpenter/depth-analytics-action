@@ -7,7 +7,10 @@ import type { ActionWithDetails } from "./types";
 const ACTION_SELECT = `
   *,
   game:games(*, home_team:teams!games_home_team_id_fkey(*), away_team:teams!games_away_team_id_fkey(*)),
-  participants(*, user:users(id, display_name, cashtag))
+  participants!participants_action_id_fkey(
+  *,
+  user:users(id, display_name, cashtag)
+)
 `;
 
 /**

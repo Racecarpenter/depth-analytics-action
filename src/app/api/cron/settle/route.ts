@@ -36,8 +36,18 @@ export async function GET(request: NextRequest) {
 
   const admin = createAdminClient();
   const provider = getSportsDataProvider();
-  const ACTION_SELECT = `*, game:games(*, home_team:teams!games_home_team_id_fkey(*), away_team:teams!games_away_team_id_fkey(*)), participants(*, user:users(id, display_name, cashtag))`;
-
+  const ACTION_SELECT = `
+  *,
+  game:games(
+    *,
+    home_team:teams!games_home_team_id_fkey(*),
+    away_team:teams!games_away_team_id_fkey(*)
+  ),
+  participants!participants_action_id_fkey(
+    *,
+    user:users(id, display_name, cashtag)
+  )
+`;
   const summary = { gamesChecked: 0, movedToLive: 0, settled: 0, cancelled: 0, expired: 0 };
 
   // Expire invites nobody responded to in time. Independent of the
