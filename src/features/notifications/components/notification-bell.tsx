@@ -4,7 +4,7 @@ import { useRef, useState, useTransition } from "react";
 import { useOnClickOutside } from "@/lib/utils/use-on-click-outside";
 import { formatRelativeTime } from "@/lib/utils/date";
 import { markAllNotificationsRead } from "../mutations";
-import type { Tables } from "@/types/database.types";
+import type { Tables } from "@/types/domain";
 
 export function NotificationBell({ notifications }: { notifications: Tables<"notifications">[] }) {
   const [open, setOpen] = useState(false);

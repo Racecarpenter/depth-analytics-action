@@ -4,7 +4,7 @@ import { getCurrentUser } from "@/features/auth/session";
 import { getStripeClient } from "@/lib/stripe/client";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getSmsProvider } from "@/lib/sms";
-import { APP_NAME } from "@/lib/constants";
+import { APP_NAME, SMS_OPT_OUT_SUFFIX } from "@/lib/constants";
 import { logError } from "@/lib/utils/log-error";
 import { normalizePhone } from "@/lib/utils/phone";
 
@@ -135,7 +135,7 @@ export async function sendReferralInvite(rawPhone: string): Promise<ReferralInvi
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   await getSmsProvider().send({
     to: phone,
-    body: `${currentUser.display_name ?? "A friend"} invited you to ${APP_NAME} — challenge friends on sports, no money ever changes hands through the app. ${appUrl}`,
+    body: `${APP_NAME}: ${currentUser.display_name ?? "A friend"} invited you — challenge friends on sports, no money ever changes hands through the app. ${appUrl}${SMS_OPT_OUT_SUFFIX}`,
   });
 
   return { ok: true };

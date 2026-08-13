@@ -39,7 +39,18 @@ export async function inviteParticipant(
   currentUserId: string,
   input: InviteParticipantInput,
 ): Promise<InviteParticipantResult | null> {
-  const { data: existingUser } = await admin.from("users").select("id").eq("phone", input.phone).maybeSingle();
+  const { data: existingUser, error: existingUserError } = await admin
+    .from("users")
+    .select("id")
+    .eq("phone", input.phone)
+    .maybeSingle();
+  if (existingUserError) {
+    // Falls through and treats this phone as "not yet a user," same as a
+    // genuine not-found — the alternative (blocking the whole invite) is
+    // worse than the small risk of a referral misattribution on a
+    // transient read failure. Logged so a persistent failure is visible.
+    logError("[inviteParticipant] existing-user lookup failed:", existingUserError);
+  }
 
   if (!existingUser?.id) {
     const { error: referralError } = await admin

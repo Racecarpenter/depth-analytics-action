@@ -1,6 +1,6 @@
 import { STATUS_LABEL } from "@/lib/constants";
 import { formatRelativeTime } from "@/lib/utils/date";
-import type { ActionStatus, ChangedByActor } from "@/types/database.types";
+import type { ActionStatus, ChangedByActor } from "@/types/domain";
 
 interface HistoryEntry {
   id: string;

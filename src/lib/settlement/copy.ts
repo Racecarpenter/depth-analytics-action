@@ -1,4 +1,4 @@
-import type { PaymentSettlementEventType } from "@/types/database.types";
+import type { PaymentSettlementEventType } from "@/types/domain";
 
 type CopyFn = (opponentName: string, amount: string) => string;
 

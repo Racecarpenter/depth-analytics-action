@@ -1,4 +1,4 @@
-import type { ActionStatus, ParticipantRole, Tables } from "@/types/database.types";
+import type { ActionStatus, ParticipantRole, Tables } from "@/types/domain";
 
 export type ActionRow = Tables<"actions">;
 export type ParticipantRow = Tables<"participants">;

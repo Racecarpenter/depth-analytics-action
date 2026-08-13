@@ -9,6 +9,8 @@ import type { ActionWithDetails } from "@/features/actions/types";
 import { notifyParticipants } from "@/features/notifications/lib/notify";
 import { createObligations, markActionNotApplicable } from "@/features/settlement/lib/rpc";
 import { RESULT_COPY } from "@/lib/settlement/copy";
+import { getSmsProvider } from "@/lib/sms";
+import { APP_NAME, SMS_OPT_OUT_SUFFIX } from "@/lib/constants";
 import { formatStake } from "@/lib/utils/currency";
 
 export const dynamic = "force-dynamic";
@@ -111,19 +113,31 @@ export async function GET(request: NextRequest) {
       continue;
     }
 
-    if (event.status === "postponed" || event.status === "cancelled") {
+    if (event.status === "cancelled") {
       for (const action of gameActions) {
         await admin
           .from("actions")
-          .update({ status: "cancelled", cancelled_reason: `Game ${event.status} by the league.`, resolved_at: new Date().toISOString() })
+          .update({ status: "cancelled", cancelled_reason: "Game cancelled by the league.", resolved_at: new Date().toISOString() })
           .eq("id", action.id);
-        await recordStatusChange(admin, action.id, action.status, "cancelled", "system", `Game ${event.status}.`);
-        await notifyParticipants(admin, action, "action_cancelled", "Action cancelled", () => `${game.away_team.abbreviation} @ ${game.home_team.abbreviation} was ${event.status}.`);
+        await recordStatusChange(admin, action.id, action.status, "cancelled", "system", "Game cancelled.");
+        await notifyParticipants(admin, action, "action_cancelled", "Action cancelled", () => `${game.away_team.abbreviation} @ ${game.home_team.abbreviation} was cancelled.`);
         await markActionNotApplicable(action.id);
         summary.cancelled += 1;
       }
       continue;
     }
+
+    // Postponed is deliberately NOT treated as cancelled: per product rule,
+    // a postponed game just isn't settled yet — this Action stays open and
+    // gets re-checked on the next tick, waiting for an eventual "final".
+    // Edge case, documented rather than solved: if a provider assigns a
+    // *new* event id to the rescheduled game instead of reusing this one,
+    // this Action will never see a final result and will sit open
+    // indefinitely. That's a real gap, but inventing sportsbook-style
+    // reschedule-matching logic here would be well past what an MVP needs —
+    // if it comes up in practice, it needs a human to look at the specific
+    // Action, not more settlement code.
+    if (event.status === "postponed") continue;
 
     if (event.status !== "final") continue;
 
@@ -169,11 +183,20 @@ export async function GET(request: NextRequest) {
         const label = personal === "won" ? "You won" : personal === "lost" ? "You lost" : "It was a push";
         return `${label} — ${game.away_team.abbreviation} ${result.awayScore}, ${game.home_team.abbreviation} ${result.homeScore}.`;
       });
+      for (const participant of action.participants) {
+        if (!participant.phone) continue;
+        const personal = personalStatus(grade, participant.role);
+        const label = personal === "won" ? "You won" : personal === "lost" ? "You lost" : "It was a push";
+        await getSmsProvider().send({
+          to: participant.phone,
+          body: `${APP_NAME}: ${label} — ${game.away_team.abbreviation} ${result.awayScore}, ${game.home_team.abbreviation} ${result.homeScore}.${SMS_OPT_OUT_SUFFIX}`,
+        });
+      }
       summary.settled += 1;
 
       // Payment settlement is a separate concern from the sports result
-      // above — whether Mike covered the spread is not the same fact as
-      // whether he's paid up. A push never owes anyone anything; a
+      // above — whether Mike's team won is not the same fact as whether
+      // he's paid up. A push never owes anyone anything; a
       // won/lost Action with a stake creates settlement obligations and
       // gets its own notification alongside (not instead of) the result
       // notification above. ACTION still never touches any money here —
@@ -191,12 +214,18 @@ export async function GET(request: NextRequest) {
               if (loser.user_id) {
                 const { title, body } = RESULT_COPY.loserOwes(winnerName, amount);
                 await admin.from("notifications").insert({ user_id: loser.user_id, action_id: action.id, type: "payment_owed", title, body });
+                if (loser.phone) {
+                  await getSmsProvider().send({ to: loser.phone, body: `${APP_NAME}: ${body}${SMS_OPT_OUT_SUFFIX}` });
+                }
               }
             }
             if (resolution.winner.user_id) {
               const loserName = resolution.losers[0]?.user?.display_name?.trim() || "your opponent";
               const { title, body } = RESULT_COPY.winnerOwed(loserName, amount);
               await admin.from("notifications").insert({ user_id: resolution.winner.user_id, action_id: action.id, type: "payment_owed", title, body });
+              if (resolution.winner.phone) {
+                await getSmsProvider().send({ to: resolution.winner.phone, body: `${APP_NAME}: ${body}${SMS_OPT_OUT_SUFFIX}` });
+              }
             }
           }
         }

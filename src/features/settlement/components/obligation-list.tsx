@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import type { PaymentSettlementStatus } from "@/types/database.types";
+import type { PaymentSettlementStatus } from "@/types/domain";
 import { confirmPaymentReceived, disputePaymentReceipt, markActionPaid, sendNudge } from "../mutations";
 
 export interface ObligationListEntry {

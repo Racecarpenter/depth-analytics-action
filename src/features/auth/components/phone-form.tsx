@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SMS_DISCLOSURE_TEXT } from "@/lib/constants";
 
 export function PhoneForm({
   onSubmit,
@@ -40,6 +42,16 @@ export function PhoneForm({
       <Button type="submit" className="w-full tap-target" size="lg" isLoading={isPending}>
         Send code
       </Button>
+      <p className="text-xs leading-relaxed text-ink-faint">
+        {SMS_DISCLOSURE_TEXT}{" "}
+        <Link href="/terms" target="_blank" className="underline underline-offset-2 hover:text-ink-muted">
+          Terms
+        </Link>{" "}
+        ·{" "}
+        <Link href="/privacy" target="_blank" className="underline underline-offset-2 hover:text-ink-muted">
+          Privacy
+        </Link>
+      </p>
     </form>
   );
 }

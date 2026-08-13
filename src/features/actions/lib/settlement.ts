@@ -1,4 +1,4 @@
-import type { MarketType } from "@/types/database.types";
+import type { MarketType } from "@/types/domain";
 
 export type Grade = "won" | "lost" | "push";
 

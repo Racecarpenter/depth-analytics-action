@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { DISPUTED_COPY } from "@/lib/settlement/copy";
-import type { PaymentSettlementStatus } from "@/types/database.types";
+import type { PaymentSettlementStatus } from "@/types/domain";
 import { confirmPaymentReceived, disputePaymentReceipt, markActionPaid, sendNudge } from "../mutations";
 
 export interface PaymentSettlementCardProps {

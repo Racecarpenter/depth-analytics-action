@@ -1,6 +1,6 @@
 import { STATUS_LABEL, STATUS_TONE } from "@/lib/constants";
 import { cn } from "@/lib/utils/cn";
-import type { ActionStatus } from "@/types/database.types";
+import type { ActionStatus } from "@/types/domain";
 
 export function StatusPill({ status, className }: { status: ActionStatus; className?: string }) {
   const isLive = status === "live";

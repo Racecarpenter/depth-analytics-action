@@ -3,15 +3,7 @@ import { MockSportsDataProvider } from "./mock-provider";
 import { TheOddsApiProvider } from "./the-odds-api-provider";
 import type { SportsDataProvider } from "./types";
 
-export type {
-  EventMarket,
-  GameResult,
-  MarketSelection,
-  ProviderTeam,
-  SearchEventsOptions,
-  SportsDataProvider,
-  SportsEvent,
-} from "./types";
+export type { GameResult, ProviderTeam, SearchEventsOptions, SportsDataProvider, SportsEvent } from "./types";
 
 let cached: SportsDataProvider | null = null;
 

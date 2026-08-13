@@ -1,6 +1,7 @@
 import { AppHeader } from "@/components/layout/app-header";
 import { BackLink } from "@/components/layout/back-link";
 import { PageContainer } from "@/components/layout/page-container";
+import { EmptyState } from "@/components/ui/empty-state";
 import { requireUser } from "@/features/auth/session";
 import { ActionTypeTabs } from "@/features/actions/components/action-type-tabs";
 import { CustomActionBuilder } from "@/features/custom-actions/components/custom-action-builder";
@@ -16,6 +17,20 @@ export default async function NewCustomActionPage({
   const { checkout } = await searchParams;
 
   const entitlement = await getEntitlementSummary();
+  if (entitlement.error) {
+    return (
+      <>
+        <AppHeader />
+        <PageContainer>
+          <BackLink href="/actions/new" label="Search" />
+          <EmptyState
+            title="Couldn't load your account"
+            description="Something went wrong checking your Action balance. Try again in a moment."
+          />
+        </PageContainer>
+      </>
+    );
+  }
   if (!entitlement.canCreateAction) {
     return (
       <>

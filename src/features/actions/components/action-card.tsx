@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
-import { MARKET_LABELS } from "@/lib/constants";
 import { formatStake } from "@/lib/utils/currency";
 import { formatGameTime } from "@/lib/utils/date";
 import { maskPhone } from "@/lib/utils/phone";
@@ -53,7 +52,7 @@ function SportsCardBody({
 
       <div className="mt-4 flex items-center justify-between border-t border-border-subtle pt-3">
         <div>
-          <p className="text-xs text-ink-faint">{MARKET_LABELS[action.market]}</p>
+          <p className="text-xs text-ink-faint">You have</p>
           <p className="mono-nums text-sm font-medium text-ink">{viewer?.side_label ?? "—"}</p>
         </div>
         <div className="text-right">

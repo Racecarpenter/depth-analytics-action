@@ -29,8 +29,9 @@ src/
   app/                     Routes only. Thin — pages fetch data and compose feature components.
     page.tsx                 Home (Pending / Accepted / Live / Settled)
     login/                    Phone auth
+    privacy/, terms/            Public, unauthenticated policy pages — see "SMS consent & Twilio A2P 10DLC"
     actions/new/               Game search + type selector (Sports / Custom)
-    actions/new/[gameId]/       Market + side + stake + invite (Sports)
+    actions/new/[gameId]/       Team pick + stake + invite (Sports)
     actions/new/custom/          Title + stake + N invites (Custom)
     actions/[actionId]/         Action detail (immutable once accepted) — branches on action_type
     invite/[token]/             Invite accept/decline (works signed-out)
@@ -59,7 +60,8 @@ src/
     utils/                    Small, boring helpers (phone, currency, odds, date, cn, compress-image)
 
   components/               Cross-feature, generic UI (Button, Card, Input, AppHeader, ...)
-  types/database.types.ts   Hand-authored types mirroring the Supabase schema
+  types/database.types.ts   Generated Database/Json shape only — see "Types, migrations & schema workflow"
+  types/domain.ts           Hand-written domain aliases + generic helpers, derived from Database
 ```
 
 **Why two provider interfaces?** `SportsDataProvider` (schedules/odds/results) and `SmsProvider` (sending texts) are the two things this MVP genuinely can't control the shape of long-term — one vendor today might not be the vendor in six months. Everything else talks to those interfaces, never to a concrete implementation, so swapping either one is a one-line env var change (see below).
@@ -93,7 +95,7 @@ npx supabase db push        # runs supabase/migrations/*.sql
 psql "$(npx supabase db remote-commit-url 2>/dev/null || true)" # optional
 ```
 
-Or simpler, paste these files into the Supabase SQL editor in order, then `supabase/seed.sql`: `0001_init.sql`, `0002_auth_otp.sql`, `0004_cashtag.sql`, `0005_monetization.sql`, `0006_referral_notification.sql`, `0007_payment_settlement.sql`, `0008_payment_notification_types.sql`, `0009_custom_actions.sql`, `0010_custom_action_status.sql`, `0011_settlement_obligations.sql`, `0012_custom_action_storage.sql`, `0013_custom_action_voting.sql`. Skip `0003_fix_rls_recursion.sql` on a fresh project — its fix is already baked into `0001_init.sql`; `0003` only exists to patch a project that was set up before that fix landed.
+Or simpler, paste these files into the Supabase SQL editor in order, then `supabase/seed.sql`: `0001_init.sql`, `0002_auth_otp.sql`, `0004_cashtag.sql`, `0005_monetization.sql`, `0006_referral_notification.sql`, `0007_payment_settlement.sql`, `0008_payment_notification_types.sql`, `0009_custom_actions.sql`, `0010_custom_action_status.sql`, `0011_settlement_obligations.sql`, `0012_custom_action_storage.sql`, `0013_custom_action_voting.sql`, `0014_action_participant_integrity.sql`, `0015_beta_entitlements.sql`, `0016_sms_consent.sql`. Skip `0003_fix_rls_recursion.sql` on a fresh project — its fix is already baked into `0001_init.sql`; `0003` only exists to patch a project that was set up before that fix landed.
 
 `0006_referral_notification.sql` and `0008_payment_notification_types.sql` each add enum values (`ALTER TYPE ... ADD VALUE`) and must run as their own statement, not batched with other DDL in the same transaction — running each migration file separately (which both options above already do) satisfies this automatically. `0010_custom_action_status.sql` is split out from `0009_custom_actions.sql` for the same reason (adds the `'resolved'` status value on its own).
 
@@ -122,6 +124,7 @@ cp .env.example .env.local
 | `INVITE_TOKEN_SECRET` | Run `openssl rand -hex 32` and paste the **output** — not the command itself. |
 | `CRON_SECRET` | Same as above — also matched automatically by Vercel Cron in production. |
 | `SMS_PROVIDER` | `mock` for local dev (default) |
+| `TWILIO_MESSAGING_SERVICE_SID` | Twilio Console → Messaging → Services (once your A2P 10DLC campaign is registered). Preferred over `TWILIO_FROM_NUMBER` — see "SMS consent & Twilio A2P 10DLC" below. |
 | `SPORTS_DATA_PROVIDER` | `mock` for local dev (default) |
 | `SITE_PASSWORD` / `SITE_GATE_SECRET` | Optional. Leave both blank locally. See "Site-wide password gate" below. |
 | `STRIPE_SECRET_KEY` | Stripe → Developers → API keys. Use a test-mode key locally. |
@@ -153,7 +156,7 @@ curl http://localhost:3000/api/cron/settle
 ### SMS: mock → Twilio
 
 1. Set `SMS_PROVIDER=twilio`
-2. Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`
+2. Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and either `TWILIO_MESSAGING_SERVICE_SID` (preferred — see "SMS consent & Twilio A2P 10DLC" below) or `TWILIO_FROM_NUMBER`
 
 Nothing else changes — `src/lib/sms/index.ts` is the only place that reads `SMS_PROVIDER`.
 
@@ -162,7 +165,7 @@ Nothing else changes — `src/lib/sms/index.ts` is the only place that reads `SM
 1. Set `SPORTS_DATA_PROVIDER=the-odds-api`
 2. Set `THE_ODDS_API_KEY` (from [the-odds-api.com](https://the-odds-api.com))
 
-`src/lib/sports-data/the-odds-api-provider.ts` implements the exact same `SportsDataProvider` interface as the mock. No call site elsewhere in the app changes. Worth reading the comments in that file before flipping it on in production — it documents a couple of product decisions (which bookmaker's line to use, settlement backfill window) that are currently simplified for MVP.
+`src/lib/sports-data/the-odds-api-provider.ts` implements the exact same `SportsDataProvider` interface as the mock. No call site elsewhere in the app changes. It only ever calls the free `/events` endpoint (schedule/teams/status) and the metered `/scores` endpoint (final results) — see "Sports Action simplification" below for why odds/markets were removed entirely. Worth reading the comments in that file before flipping it on in production — it documents the settlement backfill window limitation, currently simplified for MVP.
 
 ---
 
@@ -206,6 +209,18 @@ The previous version of this feature deep-linked the loser straight to `cash.app
 If you want real automated transfers instead, see `PATH_TO_PRODUCTION.md` for why that requires becoming a licensed money transmitter (or partnering with one) and is out of scope for this MVP.
 
 ---
+
+## Sports Action simplification
+
+A Sports Action has no sportsbook concepts at all — no moneyline/spread/total, no odds, no lines. It's exactly one question: **who wins?** The creator picks a team (`TeamPicker`, `src/features/actions/components/team-picker.tsx`); the opponent automatically gets the other team; there's no market-selection step in the creation flow at all.
+
+**Why no schema change was needed.** `actions.market`/`actions.line` and `participants.selection`/`side_label` never stored odds — the database never had odds columns, even before this simplification (odds only ever existed transiently in provider responses, rendered by the now-deleted `MarketSelector`). Every new Sports Action is simply written as `market: 'moneyline', line: null`, `selection`/`side_label` set to the picked team's abbreviation/name — which makes `gradeSelection()`'s existing `moneyline` branch (`src/features/actions/lib/settlement.ts`) the entire grading rule going forward: home score vs. away score, tie is `push`. That function still technically handles `spread`/`total` too (dead code, never reached by anything created after this change) — left in place rather than deleted, since it's a small, pure, harmless function and ripping the enum values (`market_type`: `spread`/`total`) out of the database would be pure schema churn for zero behavioral benefit. Same logic for why `actions.market`/`line` themselves weren't altered or dropped.
+
+**Postponed vs. cancelled.** The settlement cron (`/api/cron/settle`) now treats these differently: `cancelled` still cancels the Action immediately (nobody owes anything). `postponed` does nothing — the Action just stays open and gets re-checked next tick, waiting for an eventual final result. Known edge case, deliberately not solved in code: if a provider ever assigns a *new* event id to a rescheduled game instead of reusing the original one, that Action will sit open indefinitely with no automatic path to resolution. If that ever happens in practice it needs a human look, not more settlement logic.
+
+**Provider stays The Odds API.** Removing markets also meant auditing what the provider was actually being charged for — `searchEvents()` used to hit the metered `/odds` endpoint just to list games (never using the odds it got back); it now uses the free `/events` endpoint, same as `getEvent()`. The only endpoint that still costs quota is `/scores` during settlement, which is unavoidable with any provider that reports final results. A free/alternative provider (e.g. ESPN's undocumented endpoints) was evaluated and rejected for now — no official SLA or versioning guarantee, a real reliability risk against "simple + reliable" being the actual priority for beta, not saving a small amount of API cost. `SPORTS_DATA_PROVIDER`/`THE_ODDS_API_KEY` are both still required exactly as before.
+
+**Language.** `STATUS_LABEL` (`src/lib/constants.ts`) now shows `Win`/`Lose` for the `won`/`lost` statuses (sports-only in practice — Custom Actions never use those two values, they resolve straight to `resolved`) and `Action On` for `accepted` (shared with Custom Actions — reads naturally for either: locked in, awaiting a result).
 
 ## Custom Actions
 
@@ -302,13 +317,82 @@ This means the **Phone** provider must be turned on for your Supabase project �
 
 ---
 
+## SMS consent & Twilio A2P 10DLC
+
+ACTION sends transactional SMS only — verification codes, Action invitations, acceptance/status updates, results, and settlement reminders. No marketing SMS, no campaigns, no preference center. This section documents the consent flow behind that, registered with Twilio's A2P 10DLC program.
+
+**Where consent is collected.** `PhoneForm` (`src/features/auth/components/phone-form.tsx`) is the single phone-entry screen used both at `/login` and on the unauthenticated invite-accept flow (`AuthFlow`) — there's no second phone-entry screen anywhere. Directly under its "Send code" button is a small-print disclosure (`SMS_DISCLOSURE_TEXT` in `src/lib/constants.ts`) plus `Terms`/`Privacy` links. There's no checkbox — entering a phone number and pressing the existing button *is* the affirmative consent action, which is what the Twilio campaign statement describes.
+
+**Consent is recorded, not just displayed.** Every call to `requestOtp` (`src/features/auth/mutations.ts`) inserts a row into `sms_consent_events` (`supabase/migrations/0016_sms_consent.sql`): `user_id` (nullable — a brand-new phone number has no account yet at this instant), `phone`, `consent_source` (`"web"`), `consent_version`, `created_at`. `consent_version` is `SMS_DISCLOSURE_VERSION` — bump that constant any time `SMS_DISCLOSURE_TEXT`'s wording changes materially, so the audit trail always shows exactly which disclosure version a given consent event was given under. This is an append-only log (RLS enabled, zero policies — service-role only, same pattern as `analytics_events`), not an elaborate compliance system: no UI reads it, it exists purely as an audit trail if Twilio or a carrier ever asks for one.
+
+**OTP delivery stays logically separate from the opt-out list.** The campaign's own consent language bundles verification codes into the same STOP scope as everything else — so OTP is never exempted from opt-out (that would itself be a compliance problem, not a fix). Instead, `TwilioSmsProvider.send()` (`src/lib/sms/twilio.ts`) never throws; every call site already treats SMS as fire-and-forget except `requestOtp`, which now checks the result and returns an honest, actionable error ("We couldn't text that number. If you've opted out of texts from Action, text START to resume, then try again.") instead of silently claiming success or crashing.
+
+**STOP/HELP handling.** This is entirely Twilio's job, not ACTION's — enable **Advanced Opt-Out** on your Messaging Service (Twilio Console → Messaging → Services → your service → Integration) once your A2P 10DLC campaign is approved. Twilio then auto-replies to STOP/START/HELP and blocks future sends to opted-out numbers at the API level (a send to an opted-out number fails with Twilio error 21610, which `TwilioSmsProvider.send()` already handles as a soft failure — see above). ACTION deliberately does **not** maintain its own `sms_opted_out_at` column or an inbound-SMS webhook — that would duplicate carrier-level functionality Twilio already provides, and there's no product need to build a larger inbound messaging system.
+
+**Campaigns register against a Messaging Service, not a bare number.** Once your A2P 10DLC campaign is approved, set `TWILIO_MESSAGING_SERVICE_SID` (Twilio Console → Messaging → Services) — `src/lib/sms/index.ts` prefers it over `TWILIO_FROM_NUMBER` when both are set, since that's what the campaign actually attaches to and what makes Advanced Opt-Out apply. `TWILIO_FROM_NUMBER` alone still works as a fallback for a bare number with no Messaging Service configured.
+
+**Template identification.** Every outgoing transactional SMS is prefixed `ACTION:` and suffixed with `SMS_OPT_OUT_SUFFIX` (" Reply STOP to opt out.") — see the call sites in `src/features/actions/mutations.ts`, `src/features/custom-actions/mutations.ts`, `src/features/settlement/mutations.ts`, `src/features/monetization/mutations.ts`, and `src/app/api/cron/{settle,payment-reminders}/route.ts`. The OTP message carries its own short opt-out line inline instead, since it's already brand-identified by naming the code purpose.
+
+**`/privacy` and `/terms`** are public, unauthenticated pages (`src/app/privacy/page.tsx`, `src/app/terms/page.tsx`) linked from the SMS disclosure, the account page footer, and reachable even if the site-wide password gate (see below) is active — both routes are listed in `ALWAYS_PUBLIC_ROUTES` (`src/lib/utils/site-gate.ts`), which both gate checks (`middleware.ts`/`proxy.ts` and the root layout's `isSiteGatePassed()`) read. Contact info on both pages uses `SUPPORT_EMAIL` in `src/lib/constants.ts` — **replace that placeholder with a real, monitored address before production or before submitting for Twilio review.**
+
+---
+
 ## Database
 
 Seven domain tables (`supabase/migrations/0001_init.sql`): `users`, `teams`, `games`, `actions`, `participants`, `action_status_history`, `notifications`. One supporting table (`0002_auth_otp.sql`): `auth_otp_codes`, used only by the phone-auth flow above. `0004_cashtag.sql` adds a nullable `cashtag` column to `users`, now dormant (see "Cash App (dormant)" above). `0005_monetization.sql` adds six more: `purchases`, `action_passes`, `action_credit_transactions`, `referrals`, `stripe_webhook_events`, `analytics_events` — see "Monetization" above. `0006_referral_notification.sql` adds one enum value for the referral-reward notification. `0007_payment_settlement.sql` adds `actions.payment_status` and the `payment_settlement_events` table — see "Payment settlement" above. `0008_payment_notification_types.sql` adds five enum values for payment notifications.
 
 `0009_custom_actions.sql` adds `action_type`, `title`, `winner_participant_id`, and `voting_round` to `actions` (and drops the old 2-participant-only constraints/NOT NULLs that assumed every Action was a sports matchup), plus the `custom_action_votes` table — see "Custom Actions" above. `0010_custom_action_status.sql` adds the `resolved` status value on its own, per the enum-value-needs-its-own-transaction rule above. `0011_settlement_obligations.sql` is the big one: adds `settlement_obligations` (one row per debtor→creditor pair, replacing the old assumption that an Action has exactly one loser), backfills it from every existing `actions.payment_status`/`payment_settlement_events` row, and rewrites all six settlement RPCs to be obligation-scoped instead of Action-scoped — see "Payment settlement" above. `0012_custom_action_storage.sql` creates the private `custom-action-proof` Storage bucket + RLS policies. `0013_custom_action_voting.sql` adds the two voting RPCs.
 
+`0014_action_participant_integrity.sql` closes a gap Custom Actions introduced: `actions.winner_participant_id` and `settlement_obligations.debtor_participant_id`/`creditor_participant_id` were plain foreign keys to `participants(id)`, which only guarantees the referenced row exists *somewhere* — nothing stopped it from pointing at a participant on a different Action. This adds a composite unique constraint on `participants(id, action_id)` plus composite foreign keys so the database itself now enforces "the winner, debtor, and creditor must belong to the same Action," on top of the application-level checks that already did this in practice. `0015_beta_entitlements.sql` adds the `user_entitlements` table and the beta-tester grant/revoke/list functions — see "Beta testing access" below. `0016_sms_consent.sql` adds the append-only `sms_consent_events` table — see "SMS consent & Twilio A2P 10DLC" above.
+
 RLS is enabled on every table. Reads from Server Components go through the RLS-scoped client (`src/lib/supabase/server.ts`) and are limited to rows the signed-in user is actually a participant on. Writes that need to reach across users (e.g. creating a participant row for a phone number with no account yet, or the settlement cron updating someone else's Action) go through the service-role client (`src/lib/supabase/admin.ts`) from trusted server code that does its own authorization checks first — that client is marked `server-only` so it can't accidentally end up in a browser bundle.
+
+---
+
+## Types, migrations & schema workflow
+
+**`src/types/database.types.ts` is generated code.** It should only ever contain the `Database`/`Json` shape — nothing hand-written. Regenerate it any time your local migrations are ahead of what the file reflects:
+
+```bash
+npx supabase gen types typescript --linked > src/types/database.types.ts
+```
+
+Every domain alias the app actually imports (`ActionStatus`, `MarketType`, `ParticipantRole`, ...) plus the generic `Tables<T>`/`TablesInsert<T>`/`TablesUpdate<T>`/`FunctionArgs<T>`/`FunctionReturns<T>` helpers live in `src/types/domain.ts` instead, each derived from `Database` via indexed access (`Database["public"]["Enums"]["action_status"]`). That split is what makes the regenerate command above safe to run at any time — it used to overwrite hand-added aliases that lived directly in `database.types.ts`, which is exactly the failure mode this file split fixes. If you ever add a new table or RPC, regenerate, then check whether `domain.ts` needs a new alias for a new enum — it won't need anything for new tables/functions, since `Tables<T>`/`FunctionArgs<T>` already cover those generically.
+
+**Migration workflow:**
+
+```bash
+npx supabase link --project-ref <your-project-ref>
+npx supabase db push          # applies any local migration files not yet recorded as applied
+npx supabase gen types typescript --linked > src/types/database.types.ts
+```
+
+**If you ever modify the database directly through the Supabase SQL editor** (a quick fix, a manual backfill, anything outside `supabase/migrations/`), your remote schema and your local migration history are now out of sync, and `db push` has no way to know that. Two ways back to a consistent state: either write a new migration file that captures what you changed by hand (so the file-based history catches up to reality — never edit an already-applied migration file to do this), or run `npx supabase db pull` to generate a migration file from the actual remote schema diff and reconcile it with what's in `supabase/migrations/` by hand. Either way, run `npx supabase migration list --linked` first — it shows exactly which migrations are applied remotely versus present locally, and is the right first step any time something seems off. This project's migration files (0001-0015) are all idempotent where it matters (`add column if not exists`, `add value if not exists`, guarded constraint blocks), but that doesn't substitute for local and remote actually agreeing on what's been applied.
+
+---
+
+## Beta testing access
+
+Lets you grant specific users unlimited Action creation while you test in the real world, before turning monetization on for them. Beta access affects Action-creation entitlement only — no elevated database permissions, no admin capability, and it's the same shared authorization gate every other creation path uses (`consume_action_credit_or_pass`), not a separate bypass. Authorization order is: beta unlimited → active Pass → credits → paywall.
+
+Run these directly in the Supabase SQL editor (they're `SECURITY DEFINER` functions, revoked from the API roles the app uses — a client can never call these, only someone with direct SQL access to the project):
+
+```sql
+-- Grant (phone must be E.164, matching how the app stores it)
+select grant_beta_access('+16025551234');
+
+-- Grant with a note and an expiration
+select grant_beta_access('+16025551234', 'Friend beta round 1', now() + interval '30 days');
+
+-- Revoke — their credit balance or active Pass, if any, is untouched and
+-- becomes what they fall back to immediately.
+select revoke_beta_access('+16025551234');
+
+-- See who currently has active beta access
+select * from list_beta_testers();
+```
+
+Granting is idempotent — calling `grant_beta_access` again for someone who's already active just updates their note/expiration rather than creating a duplicate grant. Every grant/revoke is a permanent row in `user_entitlements` (nothing is ever deleted), so this is fully auditable after the fact.
 
 ---
 
@@ -317,7 +401,7 @@ RLS is enabled on every table. Reads from Server Components go through the RLS-s
 1. Push this repo to GitHub/GitLab/Bitbucket and import it in Vercel.
 2. Add all the environment variables from `.env.example` in Project Settings → Environment Variables (use production values — a production Supabase project, `SMS_PROVIDER=twilio` if you're ready, a real `NEXT_PUBLIC_APP_URL`, live-mode Stripe keys/price IDs).
 3. `vercel.json` already defines both cron jobs — settlement grading (`/api/cron/settle`) and payment reminders (`/api/cron/payment-reminders`), both every 5 minutes. Once `CRON_SECRET` is set as an env var, Vercel automatically sends it as each cron request's `Authorization` header — no extra setup.
-4. Run the migration files against your production Supabase project, in order — `0001_init.sql`, `0002_auth_otp.sql`, `0004_cashtag.sql`, `0005_monetization.sql`, `0006_referral_notification.sql`, `0007_payment_settlement.sql`, `0008_payment_notification_types.sql`, `0009_custom_actions.sql`, `0010_custom_action_status.sql`, `0011_settlement_obligations.sql`, `0012_custom_action_storage.sql`, `0013_custom_action_voting.sql` (SQL editor or `supabase db push`), then `supabase/seed.sql` for team reference data. Only run `0003_fix_rls_recursion.sql` too if this project was already migrated before that fix landed in `0001`.
+4. Run the migration files against your production Supabase project, in order — `0001_init.sql` through `0016_sms_consent.sql` (SQL editor or `supabase db push`), then `supabase/seed.sql` for team reference data. Only run `0003_fix_rls_recursion.sql` too if this project was already migrated before that fix landed in `0001`. See "Types, migrations & schema workflow" above if local and remote have ever drifted.
 5. Create the Stripe webhook endpoint (see "Monetization" → "Webhook setup" above) pointing at your production domain, and set `STRIPE_WEBHOOK_SECRET` to that endpoint's signing secret.
 6. Deploy.
 
@@ -327,7 +411,7 @@ RLS is enabled on every table. Reads from Server Components go through the RLS-s
 
 The schema and provider interfaces were deliberately kept normalized/generic so these don't require restructuring what's here:
 
-- **Player props** — add a `player` scope to `EventMarket`/`MarketSelection` in the provider layer; `actions.market` already stores an opaque string, so it just needs a new allowed value plus a `players` table.
+- **Odds/markets, if ever wanted back** — deliberately removed for MVP (see "Sports Action simplification"); reintroducing them means restoring an `EventMarket`/`MarketSelection`-shaped concept in the provider layer plus a market-selection step in `ActionBuilder`. `actions.market`/`line` are already there and untouched, so no schema work would be needed, just UI and provider-layer work.
 - **Group Actions / public challenges** — done for private groups as Custom Actions (see above); `participants` was already a table keyed by `action_id`, not two FK columns on `actions`, which is exactly what made 2→8 participants additive rather than a rewrite. A `visibility` flag on `actions` plus relaxing the "everyone must accept" RLS/status logic is what's left for fully public/spectator Actions.
 - **Custom payouts / multiple winners / split pots / unequal stakes** — `settlement_obligations` already supports arbitrary debtor→creditor amounts (it's not hard-coded to `stake_amount` split evenly), so most of this is a Custom Action creation-form and consensus-RPC change, not a settlement-layer one.
 - **Parlays** — a `parlay_legs` table referencing multiple `(game, market, line)` combinations per Action; `gradeSelection()` in `src/features/actions/lib/settlement.ts` is already a pure function per-leg, so a parlay just aggregates several calls to it.
@@ -340,3 +424,5 @@ The schema and provider interfaces were deliberately kept normalized/generic so 
 - The mock sports data provider's "live" scores are a simple linear interpolation toward the seeded final score, purely for demo purposes.
 - Custom Action proof photos are attached to a submission but never surfaced back in the UI after the reveal — they're stored and retrievable (`getProofPhotoUrl`), just not wired into a gallery view yet. Add one to the resolved-Action view if you want them visible after the fact.
 - Declining a Custom Action invite cancels the whole Action (no partial rebuild/backfill of a replacement participant) — same simplicity trade-off as a 2-person Sports Action, just more consequential the more people are already in.
+- `custom_action_votes.voter_participant_id`/`selected_participant_id` don't have the same same-Action composite foreign key that `actions.winner_participant_id` and `settlement_obligations` got in `0014`. `submit_custom_action_vote` already validates both against `action_id` before insert and is the table's only write path (no insert/update RLS policy exists), so the constraint would never actually catch anything today — noted as a Future cleanup rather than added speculatively.
+- `referrals` has two foreign keys to `users` (`inviter_user_id`, `invitee_user_id`). Nothing currently embeds them together in one PostgREST query, so this hasn't caused an ambiguous-relationship error — but if a future query ever does `referrals(*, user:users(...))` style embedding on both, it'll need an explicit `!fkey` hint like every Actions↔Participants query already uses.

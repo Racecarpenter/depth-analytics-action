@@ -18,12 +18,13 @@ export function getSmsProvider(): SmsProvider {
       const sid = process.env.TWILIO_ACCOUNT_SID;
       const token = process.env.TWILIO_AUTH_TOKEN;
       const from = process.env.TWILIO_FROM_NUMBER;
-      if (!sid || !token || !from) {
+      const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID || undefined;
+      if (!sid || !token || (!from && !messagingServiceSid)) {
         throw new Error(
-          "SMS_PROVIDER=twilio requires TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER.",
+          "SMS_PROVIDER=twilio requires TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and either TWILIO_MESSAGING_SERVICE_SID (preferred — required for A2P 10DLC campaign traffic) or TWILIO_FROM_NUMBER.",
         );
       }
-      cached = new TwilioSmsProvider(sid, token, from);
+      cached = new TwilioSmsProvider(sid, token, from ?? "", messagingServiceSid);
       return cached;
     }
     case "mock":

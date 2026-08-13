@@ -1,13 +1,5 @@
-import type { League } from "@/types/database.types";
-import type {
-  EventMarket,
-  GameResult,
-  MarketSelection,
-  ProviderTeam,
-  SearchEventsOptions,
-  SportsDataProvider,
-  SportsEvent,
-} from "./types";
+import type { League } from "@/types/domain";
+import type { GameResult, ProviderTeam, SearchEventsOptions, SportsDataProvider, SportsEvent } from "./types";
 
 // -----------------------------------------------------------------------------
 // Deterministic pseudo-randomness. No Math.random anywhere in this file — the
@@ -32,10 +24,6 @@ function seededUnit(seed: string): number {
 /** Deterministic float in [min, max] derived from a string seed. */
 function seededRange(seed: string, min: number, max: number): number {
   return min + seededUnit(seed) * (max - min);
-}
-
-function roundToHalf(n: number): number {
-  return Math.round(n * 2) / 2;
 }
 
 // -----------------------------------------------------------------------------
@@ -96,34 +84,6 @@ const GAME_DURATION_HOURS: Record<League, number> = {
   NBA: 2.5,
   MLB: 3.17,
   NHL: 2.75,
-};
-
-const TOTAL_BASELINE: Record<League, number> = {
-  NFL: 44.5,
-  NBA: 228.5,
-  MLB: 8.5,
-  NHL: 6.5,
-};
-
-const TOTAL_VARIANCE: Record<League, number> = {
-  NFL: 6,
-  NBA: 10,
-  MLB: 1.5,
-  NHL: 1.5,
-};
-
-const SPREAD_SCALE: Record<League, number> = {
-  NFL: 1,
-  NBA: 1,
-  MLB: 0.2,
-  NHL: 0.18,
-};
-
-const SPREAD_CAP: Record<League, number> = {
-  NFL: 16.5,
-  NBA: 16.5,
-  MLB: 2.5,
-  NHL: 2.5,
 };
 
 function eventIdFor(league: League, index: number) {
@@ -187,63 +147,6 @@ function buildEvent(league: League, index: number, now: Date): SportsEvent {
   };
 }
 
-function americanOddsFromGap(gap: number): { home: number; away: number } {
-  // Simple Elo-style win probability from the power gap.
-  const pHome = 1 / (1 + Math.pow(10, -gap / 8));
-  const toAmerican = (p: number) => {
-    const clamped = Math.min(0.97, Math.max(0.03, p));
-    return clamped >= 0.5
-      ? Math.round((-100 * clamped) / (1 - clamped))
-      : Math.round((100 * (1 - clamped)) / clamped);
-  };
-  return { home: toAmerican(pHome), away: toAmerican(1 - pHome) };
-}
-
-function buildMarkets(event: SportsEvent): EventMarket[] {
-  const gap = seededRange(`${event.id}:gap`, -12, 12);
-  const { home: homeML, away: awayML } = americanOddsFromGap(gap);
-
-  const rawSpread = gap * SPREAD_SCALE[event.league];
-  const cap = SPREAD_CAP[event.league];
-  const homeSpread = Math.max(-cap, Math.min(cap, roundToHalf(-rawSpread)));
-  const awaySpread = -homeSpread;
-
-  const total = roundToHalf(
-    TOTAL_BASELINE[event.league] + seededRange(`${event.id}:total`, -TOTAL_VARIANCE[event.league], TOTAL_VARIANCE[event.league]),
-  );
-
-  const moneyline: MarketSelection[] = [
-    { key: event.homeTeam.abbreviation, label: `${event.homeTeam.name} ML`, line: null, odds: homeML },
-    { key: event.awayTeam.abbreviation, label: `${event.awayTeam.name} ML`, line: null, odds: awayML },
-  ];
-
-  const spread: MarketSelection[] = [
-    {
-      key: event.homeTeam.abbreviation,
-      label: `${event.homeTeam.name} ${homeSpread > 0 ? "+" : ""}${homeSpread}`,
-      line: homeSpread,
-      odds: -110,
-    },
-    {
-      key: event.awayTeam.abbreviation,
-      label: `${event.awayTeam.name} ${awaySpread > 0 ? "+" : ""}${awaySpread}`,
-      line: awaySpread,
-      odds: -110,
-    },
-  ];
-
-  const totalMarket: MarketSelection[] = [
-    { key: "over", label: `Over ${total}`, line: total, odds: -110 },
-    { key: "under", label: `Under ${total}`, line: total, odds: -110 },
-  ];
-
-  return [
-    { market: "moneyline", selections: moneyline },
-    { market: "spread", selections: spread },
-    { market: "total", selections: totalMarket },
-  ];
-}
-
 function allEvents(now: Date, leagues: League[]): SportsEvent[] {
   const events: SportsEvent[] = [];
   for (const league of leagues) {
@@ -300,12 +203,6 @@ export class MockSportsDataProvider implements SportsDataProvider {
     const index = Number(match[2]);
     if (!LEAGUE_TEAMS[league] || Number.isNaN(index)) return null;
     return buildEvent(league, index, new Date());
-  }
-
-  async getMarkets(eventId: string): Promise<EventMarket[]> {
-    const event = await this.getEvent(eventId);
-    if (!event) return [];
-    return buildMarkets(event);
   }
 
   async getGameResult(eventId: string): Promise<GameResult | null> {

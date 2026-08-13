@@ -3,7 +3,7 @@ import "server-only";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { logError } from "@/lib/utils/log-error";
-import type { Tables } from "@/types/database.types";
+import type { Tables } from "@/types/domain";
 
 /** Returns the signed-in user's profile row, or null if not authenticated. */
 export async function getCurrentUser(): Promise<Tables<"users"> | null> {

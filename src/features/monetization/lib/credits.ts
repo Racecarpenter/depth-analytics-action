@@ -12,6 +12,7 @@ import { logError } from "@/lib/utils/log-error";
  */
 
 export type ConsumeResult =
+  | { allowed: true; method: "beta" }
   | { allowed: true; method: "pass" }
   | { allowed: true; method: "credit"; balanceAfter: number | null }
   | { allowed: false };
@@ -35,6 +36,7 @@ export async function consumeActionCreditOrPass(userId: string, actionId: string
   const result = data?.[0];
   if (!result || !result.allowed) return { allowed: false };
 
+  if (result.method === "beta") return { allowed: true, method: "beta" };
   if (result.method === "pass") return { allowed: true, method: "pass" };
   return { allowed: true, method: "credit", balanceAfter: result.balance_after };
 }

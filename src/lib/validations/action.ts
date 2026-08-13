@@ -2,16 +2,15 @@ import { z } from "zod";
 import { normalizePhone } from "@/lib/utils/phone";
 import { CUSTOM_ACTION_TITLE_MAX_LENGTH } from "@/lib/constants";
 
-export const marketTypeSchema = z.enum(["moneyline", "spread", "total"]);
-
 /**
- * Draft an Action from a selected provider event + market + side. The stake
- * is optional and, per product policy, purely informational — never
+ * Draft a Sports Action from a selected provider event + team pick. The
+ * stake is optional and, per product policy, purely informational — never
  * validated as a payment amount because ACTION never touches money.
+ * `selectionKey` is the chosen team's abbreviation — there's no market
+ * concept anymore, see README ("Sports Action simplification").
  */
 export const createActionSchema = z.object({
   eventId: z.string().min(1),
-  market: marketTypeSchema,
   selectionKey: z.string().min(1),
   stakeAmount: z
     .union([z.coerce.number().positive().max(1_000_000), z.literal("").transform(() => undefined)])

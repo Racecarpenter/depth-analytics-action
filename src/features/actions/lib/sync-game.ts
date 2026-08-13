@@ -2,7 +2,8 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ProviderTeam, SportsEvent } from "@/lib/sports-data";
-import type { Database, Tables } from "@/types/database.types";
+import type { Database } from "@/types/database.types";
+import type { Tables } from "@/types/domain";
 
 /**
  * Bridges a provider's SportsEvent into our normalized `games`/`teams`

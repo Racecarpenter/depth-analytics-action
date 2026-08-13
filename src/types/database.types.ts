@@ -1,88 +1,26 @@
 /**
- * Hand-authored types mirroring `supabase/migrations/0001_init.sql` and
- * `0002_auth_otp.sql`. If you have the Supabase CLI linked to a project you
- * can regenerate this file with:
+ * GENERATED CODE ONLY. Hand-authored for now (no live Supabase project is
+ * linked from this environment), but written to match exactly what
  *
- *   supabase gen types typescript --linked > src/types/database.types.ts
+ *   npx supabase gen types typescript --linked > src/types/database.types.ts
  *
- * Keeping it hand-authored for the MVP keeps the schema and types co-located
- * and reviewable in one pass. The shape below (Row/Insert/Update/Relationships
- * per table, plus Views/Functions/Enums/CompositeTypes at the schema level)
- * intentionally matches what `supabase gen types` produces — @supabase/supabase-js
- * v2's typed client relies on that exact shape.
+ * produces, so that regenerating it for real is always safe. This file must
+ * never contain anything hand-written beyond the `Database`/`Json` shape
+ * itself — no convenience aliases, no derived helper types. Every domain
+ * alias (`ActionStatus`, `MarketType`, ...) and every generic table/function
+ * helper (`Tables<T>`, `TablesInsert<T>`, ...) lives in `src/types/domain.ts`
+ * instead, derived from `Database` via indexed access. Import domain
+ * concepts from there; import `Database`/`Json` from here.
  *
- * Two things matter here that are easy to get wrong by hand: every table
- * needs a `Relationships` array (even if empty), and every `Update` type
- * must be written out as its own plain object rather than derived as
- * `Partial<Database[...]["Insert"]>` — that self-reference back into the
- * interface being defined is exactly what `supabase gen types` avoids, and
- * skipping either one causes `.insert()`/`.update()` argument types to
- * silently collapse to `never` at call sites.
+ * Two things matter here that are easy to get wrong by hand if you ever do
+ * need to patch this file manually: every table needs a `Relationships`
+ * array (even if empty), and every `Update` type must be written out as its
+ * own plain object rather than derived as `Partial<Database[...]["Insert"]>`
+ * — that self-reference back into the interface being defined is exactly
+ * what `supabase gen types` avoids, and skipping either one causes
+ * `.insert()`/`.update()` argument types to silently collapse to `never` at
+ * call sites.
  */
-
-export type League = "NFL" | "NBA" | "MLB" | "NHL";
-
-export type GameStatus = "scheduled" | "live" | "final" | "postponed" | "cancelled";
-
-export type MarketType = "moneyline" | "spread" | "total";
-
-export type ActionStatus =
-  | "pending"
-  | "accepted"
-  | "declined"
-  | "live"
-  | "won"
-  | "lost"
-  | "push"
-  | "cancelled"
-  | "expired"
-  | "resolved";
-
-export type ActionType = "sports" | "custom";
-
-export type ParticipantRole = "creator" | "opponent";
-
-export type ParticipantStatus = "invited" | "accepted" | "declined";
-
-export type NotificationType =
-  | "invite_received"
-  | "action_accepted"
-  | "action_declined"
-  | "action_live"
-  | "action_settled"
-  | "action_cancelled"
-  | "referral_reward_earned"
-  | "payment_owed"
-  | "payment_reminder"
-  | "payment_marked_paid"
-  | "payment_confirmed"
-  | "payment_disputed";
-
-export type ChangedByActor = "system" | "creator" | "opponent";
-
-export type PaymentSettlementStatus = "not_applicable" | "owed" | "marked_paid" | "settled" | "disputed";
-
-export type PaymentSettlementEventType =
-  | "owed"
-  | "reminder_6h"
-  | "reminder_24h"
-  | "reminder_48h"
-  | "manual_nudge"
-  | "marked_paid"
-  | "confirmed_received"
-  | "disputed"
-  | "not_applicable";
-
-export type CreditTransactionType =
-  | "starter_grant"
-  | "referral_reward"
-  | "action_pack_purchase"
-  | "action_created"
-  | "admin_adjustment";
-
-export type PurchaseKind = "action_pack" | "action_pass";
-
-export type PurchaseStatus = "completed" | "refunded";
 
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
@@ -122,7 +60,7 @@ export interface Database {
       teams: {
         Row: {
           id: string;
-          league: League;
+          league: Database["public"]["Enums"]["league"];
           city: string;
           name: string;
           abbreviation: string;
@@ -131,7 +69,7 @@ export interface Database {
         };
         Insert: {
           id?: string;
-          league: League;
+          league: Database["public"]["Enums"]["league"];
           city: string;
           name: string;
           abbreviation: string;
@@ -140,7 +78,7 @@ export interface Database {
         };
         Update: {
           id?: string;
-          league?: League;
+          league?: Database["public"]["Enums"]["league"];
           city?: string;
           name?: string;
           abbreviation?: string;
@@ -152,13 +90,13 @@ export interface Database {
       games: {
         Row: {
           id: string;
-          league: League;
+          league: Database["public"]["Enums"]["league"];
           provider: string;
           external_id: string;
           home_team_id: string;
           away_team_id: string;
           start_time: string;
-          status: GameStatus;
+          status: Database["public"]["Enums"]["game_status"];
           home_score: number | null;
           away_score: number | null;
           period: string | null;
@@ -167,13 +105,13 @@ export interface Database {
         };
         Insert: {
           id?: string;
-          league: League;
+          league: Database["public"]["Enums"]["league"];
           provider?: string;
           external_id: string;
           home_team_id: string;
           away_team_id: string;
           start_time: string;
-          status?: GameStatus;
+          status?: Database["public"]["Enums"]["game_status"];
           home_score?: number | null;
           away_score?: number | null;
           period?: string | null;
@@ -182,13 +120,13 @@ export interface Database {
         };
         Update: {
           id?: string;
-          league?: League;
+          league?: Database["public"]["Enums"]["league"];
           provider?: string;
           external_id?: string;
           home_team_id?: string;
           away_team_id?: string;
           start_time?: string;
-          status?: GameStatus;
+          status?: Database["public"]["Enums"]["game_status"];
           home_score?: number | null;
           away_score?: number | null;
           period?: string | null;
@@ -216,12 +154,12 @@ export interface Database {
         Row: {
           id: string;
           creator_id: string;
-          action_type: ActionType;
+          action_type: Database["public"]["Enums"]["action_type"];
           game_id: string | null;
-          market: MarketType | null;
+          market: Database["public"]["Enums"]["market_type"] | null;
           title: string | null;
           line: number | null;
-          status: ActionStatus;
+          status: Database["public"]["Enums"]["action_status"];
           stake_amount: number | null;
           stake_currency: string;
           stake_note: string;
@@ -230,19 +168,19 @@ export interface Database {
           locked_at: string | null;
           resolved_at: string | null;
           cancelled_reason: string | null;
-          payment_status: PaymentSettlementStatus;
+          payment_status: Database["public"]["Enums"]["payment_settlement_status"];
           created_at: string;
           updated_at: string;
         };
         Insert: {
           id?: string;
           creator_id: string;
-          action_type?: ActionType;
+          action_type?: Database["public"]["Enums"]["action_type"];
           game_id?: string | null;
-          market?: MarketType | null;
+          market?: Database["public"]["Enums"]["market_type"] | null;
           title?: string | null;
           line?: number | null;
-          status?: ActionStatus;
+          status?: Database["public"]["Enums"]["action_status"];
           stake_amount?: number | null;
           stake_currency?: string;
           stake_note?: string;
@@ -251,19 +189,19 @@ export interface Database {
           locked_at?: string | null;
           resolved_at?: string | null;
           cancelled_reason?: string | null;
-          payment_status?: PaymentSettlementStatus;
+          payment_status?: Database["public"]["Enums"]["payment_settlement_status"];
           created_at?: string;
           updated_at?: string;
         };
         Update: {
           id?: string;
           creator_id?: string;
-          action_type?: ActionType;
+          action_type?: Database["public"]["Enums"]["action_type"];
           game_id?: string | null;
-          market?: MarketType | null;
+          market?: Database["public"]["Enums"]["market_type"] | null;
           title?: string | null;
           line?: number | null;
-          status?: ActionStatus;
+          status?: Database["public"]["Enums"]["action_status"];
           stake_amount?: number | null;
           stake_currency?: string;
           stake_note?: string;
@@ -272,7 +210,7 @@ export interface Database {
           locked_at?: string | null;
           resolved_at?: string | null;
           cancelled_reason?: string | null;
-          payment_status?: PaymentSettlementStatus;
+          payment_status?: Database["public"]["Enums"]["payment_settlement_status"];
           created_at?: string;
           updated_at?: string;
         };
@@ -306,8 +244,8 @@ export interface Database {
           action_id: string;
           user_id: string | null;
           phone: string;
-          role: ParticipantRole;
-          status: ParticipantStatus;
+          role: Database["public"]["Enums"]["participant_role"];
+          status: Database["public"]["Enums"]["participant_status"];
           selection: string | null;
           side_label: string | null;
           invite_token: string | null;
@@ -321,8 +259,8 @@ export interface Database {
           action_id: string;
           user_id?: string | null;
           phone: string;
-          role: ParticipantRole;
-          status?: ParticipantStatus;
+          role: Database["public"]["Enums"]["participant_role"];
+          status?: Database["public"]["Enums"]["participant_status"];
           selection?: string | null;
           side_label?: string | null;
           invite_token?: string | null;
@@ -336,8 +274,8 @@ export interface Database {
           action_id?: string;
           user_id?: string | null;
           phone?: string;
-          role?: ParticipantRole;
-          status?: ParticipantStatus;
+          role?: Database["public"]["Enums"]["participant_role"];
+          status?: Database["public"]["Enums"]["participant_status"];
           selection?: string | null;
           side_label?: string | null;
           invite_token?: string | null;
@@ -422,7 +360,7 @@ export interface Database {
           debtor_participant_id: string;
           creditor_participant_id: string;
           amount: number;
-          payment_status: PaymentSettlementStatus;
+          payment_status: Database["public"]["Enums"]["payment_settlement_status"];
           created_at: string;
           updated_at: string;
         };
@@ -432,7 +370,7 @@ export interface Database {
           debtor_participant_id: string;
           creditor_participant_id: string;
           amount: number;
-          payment_status?: PaymentSettlementStatus;
+          payment_status?: Database["public"]["Enums"]["payment_settlement_status"];
           created_at?: string;
           updated_at?: string;
         };
@@ -442,7 +380,7 @@ export interface Database {
           debtor_participant_id?: string;
           creditor_participant_id?: string;
           amount?: number;
-          payment_status?: PaymentSettlementStatus;
+          payment_status?: Database["public"]["Enums"]["payment_settlement_status"];
           created_at?: string;
           updated_at?: string;
         };
@@ -474,27 +412,27 @@ export interface Database {
         Row: {
           id: string;
           action_id: string;
-          from_status: ActionStatus | null;
-          to_status: ActionStatus;
-          changed_by: ChangedByActor;
+          from_status: Database["public"]["Enums"]["action_status"] | null;
+          to_status: Database["public"]["Enums"]["action_status"];
+          changed_by: Database["public"]["Enums"]["changed_by_actor"];
           note: string | null;
           created_at: string;
         };
         Insert: {
           id?: string;
           action_id: string;
-          from_status?: ActionStatus | null;
-          to_status: ActionStatus;
-          changed_by?: ChangedByActor;
+          from_status?: Database["public"]["Enums"]["action_status"] | null;
+          to_status: Database["public"]["Enums"]["action_status"];
+          changed_by?: Database["public"]["Enums"]["changed_by_actor"];
           note?: string | null;
           created_at?: string;
         };
         Update: {
           id?: string;
           action_id?: string;
-          from_status?: ActionStatus | null;
-          to_status?: ActionStatus;
-          changed_by?: ChangedByActor;
+          from_status?: Database["public"]["Enums"]["action_status"] | null;
+          to_status?: Database["public"]["Enums"]["action_status"];
+          changed_by?: Database["public"]["Enums"]["changed_by_actor"];
           note?: string | null;
           created_at?: string;
         };
@@ -513,7 +451,7 @@ export interface Database {
           id: string;
           user_id: string;
           action_id: string | null;
-          type: NotificationType;
+          type: Database["public"]["Enums"]["notification_type"];
           title: string;
           body: string;
           read_at: string | null;
@@ -523,7 +461,7 @@ export interface Database {
           id?: string;
           user_id: string;
           action_id?: string | null;
-          type: NotificationType;
+          type: Database["public"]["Enums"]["notification_type"];
           title: string;
           body: string;
           read_at?: string | null;
@@ -533,7 +471,7 @@ export interface Database {
           id?: string;
           user_id?: string;
           action_id?: string | null;
-          type?: NotificationType;
+          type?: Database["public"]["Enums"]["notification_type"];
           title?: string;
           body?: string;
           read_at?: string | null;
@@ -561,7 +499,7 @@ export interface Database {
           id: string;
           action_id: string;
           obligation_id: string | null;
-          event_type: PaymentSettlementEventType;
+          event_type: Database["public"]["Enums"]["payment_settlement_event_type"];
           actor_user_id: string | null;
           metadata: Json;
           created_at: string;
@@ -570,7 +508,7 @@ export interface Database {
           id?: string;
           action_id: string;
           obligation_id?: string | null;
-          event_type: PaymentSettlementEventType;
+          event_type: Database["public"]["Enums"]["payment_settlement_event_type"];
           actor_user_id?: string | null;
           metadata?: Json;
           created_at?: string;
@@ -579,7 +517,7 @@ export interface Database {
           id?: string;
           action_id?: string;
           obligation_id?: string | null;
-          event_type?: PaymentSettlementEventType;
+          event_type?: Database["public"]["Enums"]["payment_settlement_event_type"];
           actor_user_id?: string | null;
           metadata?: Json;
           created_at?: string;
@@ -636,8 +574,8 @@ export interface Database {
         Row: {
           id: string;
           user_id: string;
-          kind: PurchaseKind;
-          status: PurchaseStatus;
+          kind: Database["public"]["Enums"]["purchase_kind"];
+          status: Database["public"]["Enums"]["purchase_status"];
           stripe_checkout_session_id: string;
           stripe_payment_intent_id: string | null;
           stripe_customer_id: string | null;
@@ -649,8 +587,8 @@ export interface Database {
         Insert: {
           id?: string;
           user_id: string;
-          kind: PurchaseKind;
-          status?: PurchaseStatus;
+          kind: Database["public"]["Enums"]["purchase_kind"];
+          status?: Database["public"]["Enums"]["purchase_status"];
           stripe_checkout_session_id: string;
           stripe_payment_intent_id?: string | null;
           stripe_customer_id?: string | null;
@@ -662,8 +600,8 @@ export interface Database {
         Update: {
           id?: string;
           user_id?: string;
-          kind?: PurchaseKind;
-          status?: PurchaseStatus;
+          kind?: Database["public"]["Enums"]["purchase_kind"];
+          status?: Database["public"]["Enums"]["purchase_status"];
           stripe_checkout_session_id?: string;
           stripe_payment_intent_id?: string | null;
           stripe_customer_id?: string | null;
@@ -728,7 +666,7 @@ export interface Database {
         Row: {
           id: string;
           user_id: string;
-          type: CreditTransactionType;
+          type: Database["public"]["Enums"]["credit_transaction_type"];
           amount: number;
           reference_type: string | null;
           reference_id: string | null;
@@ -738,7 +676,7 @@ export interface Database {
         Insert: {
           id?: string;
           user_id: string;
-          type: CreditTransactionType;
+          type: Database["public"]["Enums"]["credit_transaction_type"];
           amount: number;
           reference_type?: string | null;
           reference_id?: string | null;
@@ -748,7 +686,7 @@ export interface Database {
         Update: {
           id?: string;
           user_id?: string;
-          type?: CreditTransactionType;
+          type?: Database["public"]["Enums"]["credit_transaction_type"];
           amount?: number;
           reference_type?: string | null;
           reference_id?: string | null;
@@ -893,6 +831,85 @@ export interface Database {
           },
         ];
       };
+      user_entitlements: {
+        Row: {
+          id: string;
+          user_id: string;
+          entitlement_type: Database["public"]["Enums"]["entitlement_type"];
+          starts_at: string;
+          expires_at: string | null;
+          granted_at: string;
+          revoked_at: string | null;
+          note: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          entitlement_type: Database["public"]["Enums"]["entitlement_type"];
+          starts_at?: string;
+          expires_at?: string | null;
+          granted_at?: string;
+          revoked_at?: string | null;
+          note?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          entitlement_type?: Database["public"]["Enums"]["entitlement_type"];
+          starts_at?: string;
+          expires_at?: string | null;
+          granted_at?: string;
+          revoked_at?: string | null;
+          note?: string | null;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "user_entitlements_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      sms_consent_events: {
+        Row: {
+          id: string;
+          user_id: string | null;
+          phone: string;
+          consent_source: string;
+          consent_version: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id?: string | null;
+          phone: string;
+          consent_source?: string;
+          consent_version: string;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string | null;
+          phone?: string;
+          consent_source?: string;
+          consent_version?: string;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "sms_consent_events_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
     };
     Views: Record<string, never>;
     Functions: {
@@ -925,7 +942,7 @@ export interface Database {
         Returns: { ok: boolean; error: string | null }[];
       };
       settlement_record_reminder: {
-        Args: { p_obligation_id: string; p_event_type: PaymentSettlementEventType };
+        Args: { p_obligation_id: string; p_event_type: Database["public"]["Enums"]["payment_settlement_event_type"] };
         Returns: { sent: boolean }[];
       };
       settlement_record_nudge: {
@@ -951,34 +968,36 @@ export interface Database {
         Args: { p_action_id: string; p_actor_user_id: string };
         Returns: { ok: boolean; error: string | null }[];
       };
+      grant_beta_access: {
+        Args: { p_phone: string; p_note?: string | null; p_expires_at?: string | null };
+        Returns: { user_id: string; phone: string; granted_at: string; expires_at: string | null }[];
+      };
+      revoke_beta_access: {
+        Args: { p_phone: string };
+        Returns: { revoked_count: number }[];
+      };
+      list_beta_testers: {
+        Args: Record<PropertyKey, never>;
+        Returns: { phone: string; display_name: string | null; granted_at: string; expires_at: string | null; note: string | null }[];
+      };
     };
     Enums: {
-      league: League;
-      game_status: GameStatus;
-      market_type: MarketType;
-      action_status: ActionStatus;
-      participant_role: ParticipantRole;
-      participant_status: ParticipantStatus;
-      notification_type: NotificationType;
-      changed_by_actor: ChangedByActor;
-      credit_transaction_type: CreditTransactionType;
-      purchase_kind: PurchaseKind;
-      purchase_status: PurchaseStatus;
-      payment_settlement_status: PaymentSettlementStatus;
-      payment_settlement_event_type: PaymentSettlementEventType;
-      action_type: ActionType;
+      league: "NFL" | "NBA" | "MLB" | "NHL";
+      game_status: "scheduled" | "live" | "final" | "postponed" | "cancelled";
+      market_type: "moneyline" | "spread" | "total";
+      action_status: "pending" | "accepted" | "declined" | "live" | "won" | "lost" | "push" | "cancelled" | "expired" | "resolved";
+      participant_role: "creator" | "opponent";
+      participant_status: "invited" | "accepted" | "declined";
+      notification_type: "invite_received" | "action_accepted" | "action_declined" | "action_live" | "action_settled" | "action_cancelled" | "referral_reward_earned" | "payment_owed" | "payment_reminder" | "payment_marked_paid" | "payment_confirmed" | "payment_disputed";
+      changed_by_actor: "system" | "creator" | "opponent";
+      credit_transaction_type: "starter_grant" | "referral_reward" | "action_pack_purchase" | "action_created" | "admin_adjustment";
+      purchase_kind: "action_pack" | "action_pass";
+      purchase_status: "completed" | "refunded";
+      payment_settlement_status: "not_applicable" | "owed" | "marked_paid" | "settled" | "disputed";
+      payment_settlement_event_type: "owed" | "reminder_6h" | "reminder_24h" | "reminder_48h" | "manual_nudge" | "marked_paid" | "confirmed_received" | "disputed" | "not_applicable";
+      action_type: "sports" | "custom";
+      entitlement_type: "beta_unlimited";
     };
     CompositeTypes: Record<string, never>;
   };
 }
-
-export type Tables<T extends keyof Database["public"]["Tables"]> =
-  Database["public"]["Tables"][T]["Row"];
-export type TablesInsert<T extends keyof Database["public"]["Tables"]> =
-  Database["public"]["Tables"][T]["Insert"];
-export type TablesUpdate<T extends keyof Database["public"]["Tables"]> =
-  Database["public"]["Tables"][T]["Update"];
-export type FunctionArgs<T extends keyof Database["public"]["Functions"]> =
-  Database["public"]["Functions"][T]["Args"];
-export type FunctionReturns<T extends keyof Database["public"]["Functions"]> =
-  Database["public"]["Functions"][T]["Returns"];

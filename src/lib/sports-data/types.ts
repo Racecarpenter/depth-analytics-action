@@ -1,4 +1,4 @@
-import type { League } from "@/types/database.types";
+import type { League } from "@/types/domain";
 
 export interface ProviderTeam {
   league: League;
@@ -22,21 +22,6 @@ export interface SportsEvent {
   period: string | null;
 }
 
-export interface MarketSelection {
-  /** Team abbreviation for moneyline/spread, or "over" / "under" for totals. */
-  key: string;
-  /** Human-readable, e.g. "Suns -5.5", "Lakers +5.5", "Over 220.5". */
-  label: string;
-  line: number | null;
-  /** American odds, e.g. -110. Informational display only. */
-  odds: number | null;
-}
-
-export interface EventMarket {
-  market: "moneyline" | "spread" | "total";
-  selections: MarketSelection[];
-}
-
 export interface GameResult {
   eventId: string;
   status: "final" | "postponed" | "cancelled";
@@ -54,6 +39,12 @@ export interface SearchEventsOptions {
  * (mock -> The Odds API -> anything else) means writing one new class that
  * implements this interface and flipping SPORTS_DATA_PROVIDER — no call
  * sites in features/ change.
+ *
+ * Deliberately schedule/score only — no odds/markets. A Sports Action is
+ * "who wins," not a sportsbook bet, so this interface only needs to answer:
+ * what games exist, what are the teams, and who won. See README ("Sports
+ * Action simplification") for why `getMarkets()` was removed rather than
+ * left unused.
  */
 export interface SportsDataProvider {
   readonly name: string;
@@ -66,6 +57,5 @@ export interface SportsDataProvider {
    * every cron tick for every open Action.
    */
   getEvent(eventId: string, league?: League): Promise<SportsEvent | null>;
-  getMarkets(eventId: string, league?: League): Promise<EventMarket[]>;
   getGameResult(eventId: string, league?: League): Promise<GameResult | null>;
 }

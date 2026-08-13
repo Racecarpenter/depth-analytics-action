@@ -21,6 +21,20 @@ export default async function NewActionForGamePage({
   const { checkout } = await searchParams;
 
   const entitlement = await getEntitlementSummary();
+  if (entitlement.error) {
+    return (
+      <>
+        <AppHeader />
+        <PageContainer>
+          <BackLink href="/actions/new" label="Search" />
+          <EmptyState
+            title="Couldn't load your account"
+            description="Something went wrong checking your Action balance. Try again in a moment."
+          />
+        </PageContainer>
+      </>
+    );
+  }
   if (!entitlement.canCreateAction) {
     return (
       <>
@@ -39,7 +53,6 @@ export default async function NewActionForGamePage({
   if (!event) notFound();
 
   const alreadyStarted = event.status !== "scheduled";
-  const markets = alreadyStarted ? [] : await provider.getMarkets(gameId);
 
   return (
     <>
@@ -52,7 +65,7 @@ export default async function NewActionForGamePage({
             description="You can only create an Action for a game that hasn't kicked off yet."
           />
         ) : (
-          <ActionBuilder event={event} markets={markets} />
+          <ActionBuilder event={event} />
         )}
       </PageContainer>
     </>

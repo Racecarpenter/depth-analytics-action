@@ -15,7 +15,7 @@ import { createObligations } from "@/features/settlement/lib/rpc";
 import { RESULT_COPY } from "@/lib/settlement/copy";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getSmsProvider } from "@/lib/sms";
-import { APP_NAME, CUSTOM_ACTION_MAX_PARTICIPANTS, INVITE_EXPIRY_HOURS } from "@/lib/constants";
+import { APP_NAME, CUSTOM_ACTION_MAX_PARTICIPANTS, INVITE_EXPIRY_HOURS, SMS_OPT_OUT_SUFFIX } from "@/lib/constants";
 import { logError } from "@/lib/utils/log-error";
 import { formatStake } from "@/lib/utils/currency";
 import { normalizePhone } from "@/lib/utils/phone";
@@ -128,7 +128,7 @@ export async function createCustomActionAndInvite(input: {
       }
 
       const inviteLink = inviteUrl(invited.inviteToken);
-      const smsBody = `${currentUser.display_name ?? "A friend"} invited you to an Action on ${APP_NAME}: ${parsed.data.title} — ${stakeDisplay} each, ${totalPlayers} players. Review it: ${inviteLink}`;
+      const smsBody = `${APP_NAME}: ${currentUser.display_name ?? "A friend"} invited you to an Action: ${parsed.data.title} — ${stakeDisplay} each, ${totalPlayers} players. Review it: ${inviteLink}${SMS_OPT_OUT_SUFFIX}`;
       await getSmsProvider().send({ to: phone, body: smsBody });
 
       if (invited.existingUserId) {
@@ -227,15 +227,19 @@ export async function submitCustomActionVote(
       for (const p of action.participants) {
         if (!p.user_id) continue;
         const isWinner = p.id === result.winnerParticipantId;
+        const body = isWinner
+          ? `You won: ${action.title ?? "your Custom Action"}.`
+          : `${participantDisplayName(resolution.winner)} won: ${action.title ?? "your Custom Action"}.`;
         await createNotification(admin, {
           userId: p.user_id,
           actionId,
           type: "action_settled",
           title: "Results are in",
-          body: isWinner
-            ? `You won: ${action.title ?? "your Custom Action"}.`
-            : `${participantDisplayName(resolution.winner)} won: ${action.title ?? "your Custom Action"}.`,
+          body,
         });
+        if (p.phone) {
+          await getSmsProvider().send({ to: p.phone, body: `${APP_NAME}: ${body}${SMS_OPT_OUT_SUFFIX}` });
+        }
       }
 
       if (action.stake_amount) {
@@ -247,11 +251,17 @@ export async function submitCustomActionVote(
             if (!loser.user_id) continue;
             const { title, body } = RESULT_COPY.loserOwes(winnerName, amount);
             await createNotification(admin, { userId: loser.user_id, actionId, type: "payment_owed", title, body });
+            if (loser.phone) {
+              await getSmsProvider().send({ to: loser.phone, body: `${APP_NAME}: ${body}${SMS_OPT_OUT_SUFFIX}` });
+            }
           }
           if (resolution.winner.user_id) {
             const loserName = resolution.losers[0] ? participantDisplayName(resolution.losers[0]) : "your opponent";
             const { title, body } = RESULT_COPY.winnerOwed(loserName, amount);
             await createNotification(admin, { userId: resolution.winner.user_id, actionId, type: "payment_owed", title, body });
+            if (resolution.winner.phone) {
+              await getSmsProvider().send({ to: resolution.winner.phone, body: `${APP_NAME}: ${body}${SMS_OPT_OUT_SUFFIX}` });
+            }
           }
         }
       }

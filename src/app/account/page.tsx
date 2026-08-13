@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { AppHeader } from "@/components/layout/app-header";
 import { BackLink } from "@/components/layout/back-link";
 import { PageContainer } from "@/components/layout/page-container";
@@ -27,6 +28,16 @@ export default async function AccountPage() {
         </div>
 
         <SignOutButton />
+
+        <p className="mt-8 text-xs text-ink-faint">
+          <Link href="/terms" className="underline underline-offset-2 hover:text-ink-muted">
+            Terms
+          </Link>{" "}
+          ·{" "}
+          <Link href="/privacy" className="underline underline-offset-2 hover:text-ink-muted">
+            Privacy
+          </Link>
+        </p>
       </PageContainer>
     </>
   );

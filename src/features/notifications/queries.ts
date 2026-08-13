@@ -1,7 +1,7 @@
 import "server-only";
 
 import { createClient } from "@/lib/supabase/server";
-import type { Tables } from "@/types/database.types";
+import type { Tables } from "@/types/domain";
 
 export async function getRecentNotifications(limit = 12): Promise<Tables<"notifications">[]> {
   const supabase = await createClient();

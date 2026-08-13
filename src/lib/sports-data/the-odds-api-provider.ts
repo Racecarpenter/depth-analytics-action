@@ -1,13 +1,5 @@
-import type { League } from "@/types/database.types";
-import type {
-  EventMarket,
-  GameResult,
-  MarketSelection,
-  ProviderTeam,
-  SearchEventsOptions,
-  SportsDataProvider,
-  SportsEvent,
-} from "./types";
+import type { League } from "@/types/domain";
+import type { GameResult, ProviderTeam, SearchEventsOptions, SportsDataProvider, SportsEvent } from "./types";
 
 const BASE_URL = "https://api.the-odds-api.com/v4";
 
@@ -17,31 +9,6 @@ const SPORT_KEY: Record<League, string> = {
   MLB: "baseball_mlb",
   NHL: "icehockey_nhl",
 };
-
-interface OddsApiOutcome {
-  name: string;
-  price: number;
-  point?: number;
-}
-
-interface OddsApiMarket {
-  key: "h2h" | "spreads" | "totals";
-  outcomes: OddsApiOutcome[];
-}
-
-interface OddsApiBookmaker {
-  key: string;
-  markets: OddsApiMarket[];
-}
-
-interface OddsApiEvent {
-  id: string;
-  sport_key: string;
-  commence_time: string;
-  home_team: string;
-  away_team: string;
-  bookmakers: OddsApiBookmaker[];
-}
 
 /** Shape returned by the free /events endpoint — no bookmakers/odds. */
 interface OddsApiEventLite {
@@ -65,66 +32,22 @@ function teamRefFromName(league: League, fullName: string): ProviderTeam {
   return { league, city, name, abbreviation: name.slice(0, 3).toUpperCase() };
 }
 
-function toEventMarkets(
-  home: string,
-  away: string,
-  bookmaker: OddsApiBookmaker | undefined,
-): EventMarket[] {
-  if (!bookmaker) return [];
-
-  const find = (key: OddsApiMarket["key"]) => bookmaker.markets.find((m) => m.key === key);
-
-  const markets: EventMarket[] = [];
-
-  const h2h = find("h2h");
-  if (h2h) {
-    const selections: MarketSelection[] = h2h.outcomes.map((o) => ({
-      key: o.name === home ? "HOME" : "AWAY",
-      label: `${o.name} ML`,
-      line: null,
-      odds: o.price,
-    }));
-    markets.push({ market: "moneyline", selections });
-  }
-
-  const spreads = find("spreads");
-  if (spreads) {
-    const selections: MarketSelection[] = spreads.outcomes.map((o) => ({
-      key: o.name === home ? "HOME" : "AWAY",
-      label: `${o.name} ${o.point && o.point > 0 ? "+" : ""}${o.point ?? ""}`,
-      line: o.point ?? null,
-      odds: o.price,
-    }));
-    markets.push({ market: "spread", selections });
-  }
-
-  const totals = find("totals");
-  if (totals) {
-    const selections: MarketSelection[] = totals.outcomes.map((o) => ({
-      key: o.name.toLowerCase().includes("over") ? "over" : "under",
-      label: `${o.name} ${o.point ?? ""}`,
-      line: o.point ?? null,
-      odds: o.price,
-    }));
-    markets.push({ market: "total", selections });
-  }
-
-  return markets;
-}
-
 /**
  * Real-data implementation for https://the-odds-api.com. Implements the
  * exact same SportsDataProvider contract as the mock provider — flipping
  * SPORTS_DATA_PROVIDER=the-odds-api is the only change required anywhere in
  * the app.
  *
- * Notes for whoever wires this up for real:
- *  - `getMarkets` re-fetches a single event's odds rather than trusting a
- *    cached search response, since lines move between search and selection.
- *  - Only the first bookmaker returned is used. For production you'll likely
- *    want to pick a specific book (e.g. "draftkings") or a consensus/median
- *    across a few, since ACTION only needs *a* line to lock in, not the best
- *    line — this is a peer-to-peer app, not a shopping tool.
+ * Deliberately odds-free: a Sports Action is "who wins," not a sportsbook
+ * bet, so this class only ever calls the free `/events` endpoint (schedule,
+ * teams, status) and the metered `/scores` endpoint (final results — the one
+ * call that's genuinely unavoidable with any provider). It never calls
+ * `/odds`, which used to be the bulk of this provider's metered usage
+ * (`searchEvents` previously hit `/odds` just to list games, despite never
+ * using the odds it got back). See README ("Sports Action simplification")
+ * for the full picture.
+ *
+ * Notes for whoever revisits this:
  *  - The Odds API's `/scores` endpoint only looks back `daysFrom` days
  *    (max 3), which is enough for same-day settlement but means a settlement
  *    job that's been down for a while needs a wider backfill strategy.
@@ -146,27 +69,21 @@ export class TheOddsApiProvider implements SportsDataProvider {
     return (await res.json()) as T;
   }
 
-  private async fetchEventsForLeague(league: League): Promise<OddsApiEvent[]> {
-    return this.fetchJson<OddsApiEvent[]>(`/sports/${SPORT_KEY[league]}/odds`, {
-      regions: "us",
-      markets: "h2h,spreads,totals",
-      oddsFormat: "american",
-    });
-  }
-
   /**
-   * Free — the /events endpoint never counts against the usage quota. Used
-   * anywhere we only need to know a game's schedule/live status (not its
-   * odds), which is most of what the settlement cron needs on every tick.
+   * Free — the /events endpoint never counts against the usage quota.
+   * Without `eventIds`, returns every upcoming/live event for the league
+   * (used by `searchEvents`); with it, filters to specific ids (used by
+   * `getEvent`). This is the only endpoint this provider calls for anything
+   * other than final scores.
    */
-  private async fetchEventLite(league: League, eventId: string): Promise<OddsApiEventLite | null> {
-    const events = await this.fetchJson<OddsApiEventLite[]>(`/sports/${SPORT_KEY[league]}/events`, {
-      eventIds: eventId,
-    });
-    return events[0] ?? null;
+  private async fetchEventsFree(league: League, eventIds?: string): Promise<OddsApiEventLite[]> {
+    return this.fetchJson<OddsApiEventLite[]>(
+      `/sports/${SPORT_KEY[league]}/events`,
+      eventIds ? { eventIds } : {},
+    );
   }
 
-  private toSportsEvent(league: League, e: OddsApiEvent | OddsApiEventLite): SportsEvent {
+  private toSportsEvent(league: League, e: OddsApiEventLite): SportsEvent {
     return {
       id: e.id,
       league,
@@ -182,7 +99,7 @@ export class TheOddsApiProvider implements SportsDataProvider {
 
   async searchEvents(query: string, options?: SearchEventsOptions): Promise<SportsEvent[]> {
     const leagues = options?.leagues ?? (Object.keys(SPORT_KEY) as League[]);
-    const results = await Promise.all(leagues.map((l) => this.fetchEventsForLeague(l)));
+    const results = await Promise.all(leagues.map((l) => this.fetchEventsFree(l)));
 
     const words = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
     const events = leagues.flatMap((league, i) =>
@@ -203,42 +120,25 @@ export class TheOddsApiProvider implements SportsDataProvider {
   }
 
   async getEvent(eventId: string, league?: League): Promise<SportsEvent | null> {
-    // Uses the free /events endpoint (no odds needed here, just schedule /
-    // live status) — this is what the settlement cron calls on every tick
-    // for every open Action, so keeping it off the metered /odds endpoint
-    // matters a lot. Pass `league` when it's already known (the cron route
-    // always has it via the games table) to make this a single free call
-    // instead of a 4-league sweep.
+    // This is what the settlement cron calls on every tick for every open
+    // Action, so keeping it on the free endpoint matters a lot. Pass
+    // `league` when it's already known (the cron route always has it via
+    // the games table) to make this a single free call instead of a
+    // 4-league sweep.
     if (league) {
-      const match = await this.fetchEventLite(league, eventId);
-      return match ? this.toSportsEvent(league, match) : null;
+      const events = await this.fetchEventsFree(league, eventId);
+      return events[0] ? this.toSportsEvent(league, events[0]) : null;
     }
     for (const l of Object.keys(SPORT_KEY) as League[]) {
-      const match = await this.fetchEventLite(l, eventId);
-      if (match) return this.toSportsEvent(l, match);
+      const events = await this.fetchEventsFree(l, eventId);
+      if (events[0]) return this.toSportsEvent(l, events[0]);
     }
     return null;
   }
 
-  async getMarkets(eventId: string, league?: League): Promise<EventMarket[]> {
-    const leagues = league ? [league] : (Object.keys(SPORT_KEY) as League[]);
-    for (const l of leagues) {
-      try {
-        const event = await this.fetchJson<OddsApiEvent>(
-          `/sports/${SPORT_KEY[l]}/events/${eventId}/odds`,
-          { regions: "us", markets: "h2h,spreads,totals", oddsFormat: "american" },
-        );
-        return toEventMarkets(event.home_team, event.away_team, event.bookmakers?.[0]);
-      } catch {
-        continue;
-      }
-    }
-    return [];
-  }
-
   async getGameResult(eventId: string, league?: League): Promise<GameResult | null> {
-    // Unlike /events, /scores always costs quota (2 credits with daysFrom
-    // set) — passing `league` turns this into 1 call instead of up to 4.
+    // Unlike /events, /scores always costs quota — passing `league` turns
+    // this into 1 call instead of up to 4.
     const leagues = league ? [league] : (Object.keys(SPORT_KEY) as League[]);
     for (const l of leagues) {
       const scores = await this.fetchJson<OddsApiScoreEntry[]>(`/sports/${SPORT_KEY[l]}/scores`, {

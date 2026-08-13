@@ -13,7 +13,7 @@ import { NotificationBell } from "@/features/notifications/components/notificati
 import { BalanceBadge } from "@/features/monetization/components/balance-badge";
 import { getEntitlementSummary } from "@/features/monetization/queries";
 import { STATUS_GROUPS } from "@/lib/constants";
-import type { ActionStatus } from "@/types/database.types";
+import type { ActionStatus } from "@/types/domain";
 
 export default async function HomePage() {
   const user = await requireUser();

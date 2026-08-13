@@ -2,6 +2,7 @@
 
 import { getCurrentUser } from "@/features/auth/session";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { logError } from "@/lib/utils/log-error";
 import { uploadProofPhoto } from "./lib/proof-storage";
 
 export interface UploadProofResult {
@@ -24,13 +25,14 @@ export async function uploadCustomActionProof(actionId: string, formData: FormDa
   if (!(file instanceof File)) return { ok: false, error: "No image selected." };
 
   const admin = createAdminClient();
-  const { data: participant } = await admin
+  const { data: participant, error: participantError } = await admin
     .from("participants")
     .select("id")
     .eq("action_id", actionId)
     .eq("user_id", currentUser.id)
     .eq("status", "accepted")
     .maybeSingle();
+  if (participantError) logError("[uploadCustomActionProof] participant lookup failed:", participantError);
 
   if (!participant) return { ok: false, error: "Only participants on this Action can attach proof." };
 

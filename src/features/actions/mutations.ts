@@ -7,7 +7,7 @@ import { createNotification } from "@/features/notifications/lib/notify";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getSportsDataProvider } from "@/lib/sports-data";
 import { getSmsProvider } from "@/lib/sms";
-import { APP_NAME, INVITE_EXPIRY_HOURS } from "@/lib/constants";
+import { APP_NAME, INVITE_EXPIRY_HOURS, SMS_OPT_OUT_SUFFIX } from "@/lib/constants";
 import { logError } from "@/lib/utils/log-error";
 import { normalizePhone } from "@/lib/utils/phone";
 import { createActionSchema } from "@/lib/validations/action";
@@ -36,13 +36,20 @@ class ActionCreationFailedError extends Error {}
 
 /**
  * Creates an Action and its invite in one step. There's no persisted
- * "draft" state — the game/market/side/stake wizard lives entirely in
- * client state until the creator enters a phone number and sends it, which
- * is the point this mutation runs.
+ * "draft" state — the game/team/stake wizard lives entirely in client state
+ * until the creator enters a phone number and sends it, which is the point
+ * this mutation runs.
+ *
+ * A Sports Action is deliberately just "who wins": `selectionKey` is the
+ * creator's chosen team abbreviation (home or away), and the opponent
+ * automatically gets the other team — no market/odds concept at all. Every
+ * new Sports Action is stored as `market: 'moneyline', line: null`, which
+ * is what makes `gradeSelection()`'s existing moneyline branch (home score
+ * vs. away score, tie = push) the entire grading logic going forward. See
+ * README ("Sports Action simplification").
  */
 export async function createActionAndInvite(input: {
   eventId: string;
-  market: "moneyline" | "spread" | "total";
   selectionKey: string;
   stakeAmount?: number;
   opponentPhone: string;
@@ -52,7 +59,6 @@ export async function createActionAndInvite(input: {
 
   const parsed = createActionSchema.safeParse({
     eventId: input.eventId,
-    market: input.market,
     selectionKey: input.selectionKey,
     stakeAmount: input.stakeAmount,
   });
@@ -73,24 +79,16 @@ export async function createActionAndInvite(input: {
     return { ok: false, error: "You can only create an Action for a game that hasn't started." };
   }
 
-  const markets = await provider.getMarkets(parsed.data.eventId);
-  const marketLine = markets.find((m) => m.market === parsed.data.market);
-  const creatorSelection = marketLine?.selections.find((s) => s.key === parsed.data.selectionKey);
-  if (!marketLine || !creatorSelection) {
-    return { ok: false, error: "That selection is no longer available." };
-  }
-  const opponentSelection = marketLine.selections.find((s) => s.key !== parsed.data.selectionKey);
-  if (!opponentSelection) {
-    return { ok: false, error: "Couldn't determine the opposing side." };
-  }
-
-  // Canonical line, always stored home-relative (spread) or shared (total).
-  const homeLine =
-    parsed.data.market === "spread"
-      ? (marketLine.selections.find((s) => s.key === event.homeTeam.abbreviation)?.line ?? null)
-      : parsed.data.market === "total"
-        ? (marketLine.selections[0]?.line ?? null)
+  const creatorTeam =
+    event.homeTeam.abbreviation === parsed.data.selectionKey
+      ? event.homeTeam
+      : event.awayTeam.abbreviation === parsed.data.selectionKey
+        ? event.awayTeam
         : null;
+  if (!creatorTeam) {
+    return { ok: false, error: "That team isn't part of this game." };
+  }
+  const opponentTeam = creatorTeam === event.homeTeam ? event.awayTeam : event.homeTeam;
 
   const admin = createAdminClient();
 
@@ -121,8 +119,8 @@ export async function createActionAndInvite(input: {
         id: actionId,
         creator_id: currentUser.id,
         game_id: game.id,
-        market: parsed.data.market,
-        line: homeLine,
+        market: "moneyline",
+        line: null,
         status: "pending",
         stake_amount: parsed.data.stakeAmount ?? null,
       })
@@ -139,16 +137,16 @@ export async function createActionAndInvite(input: {
       phone: currentUser.phone,
       role: "creator",
       status: "accepted",
-      selection: creatorSelection.key,
-      side_label: creatorSelection.label,
+      selection: creatorTeam.abbreviation,
+      side_label: creatorTeam.name,
       responded_at: new Date().toISOString(),
     });
 
     const invited = await inviteParticipant(admin, currentUser.id, {
       actionId: action.id,
       phone: opponentPhone,
-      selection: opponentSelection.key,
-      sideLabel: opponentSelection.label,
+      selection: opponentTeam.abbreviation,
+      sideLabel: opponentTeam.name,
       inviteExpiryHours: INVITE_EXPIRY_HOURS,
     });
 
@@ -160,7 +158,7 @@ export async function createActionAndInvite(input: {
 
     const matchup = `${event.awayTeam.name} @ ${event.homeTeam.name}`;
     const inviteLink = inviteUrl(invited.inviteToken);
-    const smsBody = `${currentUser.display_name ?? "A friend"} challenged you on ${APP_NAME}: ${matchup} — you'd take ${opponentSelection.label}. Review it: ${inviteLink}`;
+    const smsBody = `${APP_NAME}: ${currentUser.display_name ?? "A friend"} challenged you: ${matchup} — you'd take ${opponentTeam.name}. Review it: ${inviteLink}${SMS_OPT_OUT_SUFFIX}`;
     await getSmsProvider().send({ to: opponentPhone, body: smsBody });
 
     if (invited.existingUserId) {
@@ -212,12 +210,13 @@ export async function respondToInvite(
 
   const admin = createAdminClient();
 
-  const { data: participant } = await admin
+  const { data: participant, error: participantError } = await admin
     .from("participants")
     .select("*")
     .eq("id", payload.participantId)
     .eq("action_id", payload.actionId)
     .maybeSingle();
+  if (participantError) logError("[respondToInvite] participant lookup failed:", participantError);
 
   if (!participant || participant.invite_token !== token) {
     return { ok: false, error: "This invite link is invalid or has expired." };
@@ -232,16 +231,22 @@ export async function respondToInvite(
     return { ok: false, error: "This invite was sent to a different phone number." };
   }
 
-  const { data: action } = await admin.from("actions").select("*").eq("id", payload.actionId).maybeSingle();
+  const { data: action, error: actionError } = await admin
+    .from("actions")
+    .select("*")
+    .eq("id", payload.actionId)
+    .maybeSingle();
+  if (actionError) logError("[respondToInvite] action lookup failed:", actionError);
   if (!action) return { ok: false, error: "This Action no longer exists." };
   if (action.status !== "pending") return { ok: false, error: "This Action is no longer available." };
 
-  const { data: creatorParticipant } = await admin
+  const { data: creatorParticipant, error: creatorError } = await admin
     .from("participants")
     .select("*")
     .eq("action_id", action.id)
     .eq("role", "creator")
     .maybeSingle();
+  if (creatorError) logError("[respondToInvite] creator participant lookup failed:", creatorError);
 
   if (decision === "decline") {
     await admin
@@ -288,7 +293,7 @@ export async function respondToInvite(
   // notifies everyone else.
   const { data: allParticipants } = await admin
     .from("participants")
-    .select("user_id, status")
+    .select("user_id, status, phone")
     .eq("action_id", action.id);
   const everyoneAccepted = (allParticipants ?? []).every((p) => p.status === "accepted");
 
@@ -308,6 +313,12 @@ export async function respondToInvite(
         title: "Action accepted",
         body: "Everyone's in. It's locked in.",
       });
+      if (p.phone) {
+        await getSmsProvider().send({
+          to: p.phone,
+          body: `${APP_NAME}: Everyone's in — your Action is locked in.${SMS_OPT_OUT_SUFFIX}`,
+        });
+      }
     }
   } else if (creatorParticipant?.user_id && creatorParticipant.user_id !== currentUser.id) {
     await createNotification(admin, {
@@ -317,6 +328,12 @@ export async function respondToInvite(
       title: "Action accepted",
       body: `${currentUser.display_name ?? "Someone"} accepted. Waiting on the rest.`,
     });
+    if (creatorParticipant.phone) {
+      await getSmsProvider().send({
+        to: creatorParticipant.phone,
+        body: `${APP_NAME}: ${currentUser.display_name ?? "Someone"} accepted your Action. Waiting on the rest.${SMS_OPT_OUT_SUFFIX}`,
+      });
+    }
   }
 
   // Referral reward: fires the first time this user has ever accepted an
@@ -344,7 +361,8 @@ export async function cancelAction(actionId: string): Promise<ActionMutationResu
   if (!currentUser) return { ok: false, error: "You need to be signed in." };
 
   const admin = createAdminClient();
-  const { data: action } = await admin.from("actions").select("*").eq("id", actionId).maybeSingle();
+  const { data: action, error: actionError } = await admin.from("actions").select("*").eq("id", actionId).maybeSingle();
+  if (actionError) logError("[cancelAction] action lookup failed:", actionError);
   if (!action) return { ok: false, error: "This Action no longer exists." };
   if (action.creator_id !== currentUser.id) return { ok: false, error: "Only the creator can cancel this." };
   if (action.status !== "pending") return { ok: false, error: "This Action can no longer be cancelled." };

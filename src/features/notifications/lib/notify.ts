@@ -2,7 +2,8 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ActionWithDetails } from "@/features/actions/types";
-import type { Database, NotificationType, ParticipantRole } from "@/types/database.types";
+import type { Database } from "@/types/database.types";
+import type { NotificationType, ParticipantRole } from "@/types/domain";
 
 export async function createNotification(
   admin: SupabaseClient<Database>,

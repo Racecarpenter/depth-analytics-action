@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { getCurrentUser } from "@/features/auth/session";
 import { createNotification } from "@/features/notifications/lib/notify";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getSmsProvider } from "@/lib/sms";
+import { APP_NAME, SMS_OPT_OUT_SUFFIX } from "@/lib/constants";
 import { formatStake } from "@/lib/utils/currency";
 import { CONFIRMED_COPY, DISPUTED_COPY, MARK_PAID_COPY, pickNudgeCopy } from "@/lib/settlement/copy";
 import { getObligationContext, participantDisplayName } from "./lib/context";
@@ -31,6 +33,9 @@ export async function markActionPaid(obligationId: string): Promise<SettlementMu
       formatStake(context.amount),
     );
     await createNotification(admin, { userId: context.creditor.user_id, actionId: context.actionId, type: "payment_marked_paid", title, body });
+    if (context.creditor.phone) {
+      await getSmsProvider().send({ to: context.creditor.phone, body: `${APP_NAME}: ${body}${SMS_OPT_OUT_SUFFIX}` });
+    }
   }
 
   if (context) revalidatePath(`/actions/${context.actionId}`);
@@ -50,6 +55,9 @@ export async function confirmPaymentReceived(obligationId: string): Promise<Sett
   if (context?.debtor.user_id) {
     const { title, body } = CONFIRMED_COPY.loserNotified(participantDisplayName(context.creditor));
     await createNotification(admin, { userId: context.debtor.user_id, actionId: context.actionId, type: "payment_confirmed", title, body });
+    if (context.debtor.phone) {
+      await getSmsProvider().send({ to: context.debtor.phone, body: `${APP_NAME}: ${body}${SMS_OPT_OUT_SUFFIX}` });
+    }
   }
 
   if (context) revalidatePath(`/actions/${context.actionId}`);
@@ -75,6 +83,9 @@ export async function disputePaymentReceipt(obligationId: string): Promise<Settl
   if (context?.debtor.user_id) {
     const { title, body } = DISPUTED_COPY.loserNotified();
     await createNotification(admin, { userId: context.debtor.user_id, actionId: context.actionId, type: "payment_disputed", title, body });
+    if (context.debtor.phone) {
+      await getSmsProvider().send({ to: context.debtor.phone, body: `${APP_NAME}: ${body}${SMS_OPT_OUT_SUFFIX}` });
+    }
   }
 
   if (context) revalidatePath(`/actions/${context.actionId}`);
@@ -104,6 +115,9 @@ export async function sendNudge(obligationId: string): Promise<SettlementMutatio
   if (context?.debtor.user_id) {
     const body = pickNudgeCopy(participantDisplayName(context.creditor), formatStake(context.amount));
     await createNotification(admin, { userId: context.debtor.user_id, actionId: context.actionId, type: "payment_reminder", title: "Nudge", body });
+    if (context.debtor.phone) {
+      await getSmsProvider().send({ to: context.debtor.phone, body: `${APP_NAME}: ${body}${SMS_OPT_OUT_SUFFIX}` });
+    }
   }
 
   if (context) revalidatePath(`/actions/${context.actionId}`);

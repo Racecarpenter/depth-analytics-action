@@ -1,6 +1,6 @@
 import "server-only";
-import { cookies } from "next/headers";
-import { isValidGateToken, SITE_GATE_COOKIE } from "./site-gate";
+import { cookies, headers } from "next/headers";
+import { ALWAYS_PUBLIC_ROUTES, isValidGateToken, SITE_GATE_COOKIE } from "./site-gate";
 
 /**
  * Authoritative gate check, called directly from the root layout instead of
@@ -18,6 +18,14 @@ export async function isSiteGatePassed(): Promise<boolean> {
   const secret = process.env.SITE_GATE_SECRET;
   const password = process.env.SITE_PASSWORD;
   if (!secret || !password) return true; // gate disabled entirely when unset
+
+  // /privacy and /terms must render even if the gate is active — see
+  // ALWAYS_PUBLIC_ROUTES. Relies on middleware-handler.ts forwarding the
+  // current path as x-pathname; if that header is ever missing (middleware
+  // didn't run), this just falls through to the normal cookie check below —
+  // same behavior as before this exemption existed, not a new hole.
+  const pathname = (await headers()).get("x-pathname");
+  if (pathname && ALWAYS_PUBLIC_ROUTES.includes(pathname)) return true;
 
   const store = await cookies();
   const token = store.get(SITE_GATE_COOKIE)?.value;

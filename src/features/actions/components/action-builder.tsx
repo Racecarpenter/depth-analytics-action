@@ -4,40 +4,28 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatGameTime } from "@/lib/utils/date";
-import type { EventMarket, SportsEvent } from "@/lib/sports-data";
-import type { MarketType } from "@/types/database.types";
+import type { SportsEvent } from "@/lib/sports-data";
 import { createActionAndInvite } from "../mutations";
 import { InviteForm } from "./invite-form";
-import { MarketSelector } from "./market-selector";
 import { StakeInput } from "./stake-input";
+import { TeamPicker } from "./team-picker";
 
-export function ActionBuilder({ event, markets }: { event: SportsEvent; markets: EventMarket[] }) {
-  const [market, setMarket] = useState<MarketType>(markets[0]?.market ?? "moneyline");
+export function ActionBuilder({ event }: { event: SportsEvent }) {
   const [selectionKey, setSelectionKey] = useState<string | null>(null);
   const [stake, setStake] = useState("");
   const [error, setError] = useState<string | undefined>();
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
 
-  function handleMarketChange(nextMarket: MarketType, nextSelectionKey: string) {
-    if (nextMarket !== market) {
-      setMarket(nextMarket);
-      setSelectionKey(nextSelectionKey || null);
-    } else if (nextSelectionKey) {
-      setSelectionKey(nextSelectionKey);
-    }
-  }
-
   function handleInvite(phone: string) {
     if (!selectionKey) {
-      setError("Pick a side first.");
+      setError("Pick a team first.");
       return;
     }
     setError(undefined);
     startTransition(async () => {
       const result = await createActionAndInvite({
         eventId: event.id,
-        market,
         selectionKey,
         stakeAmount: stake ? Number(stake) : undefined,
         opponentPhone: phone,
@@ -71,8 +59,8 @@ export function ActionBuilder({ event, markets }: { event: SportsEvent; markets:
       </Card>
 
       <div>
-        <p className="mb-3 text-sm font-medium text-ink">Market &amp; side</p>
-        <MarketSelector markets={markets} market={market} selectionKey={selectionKey} onChange={handleMarketChange} />
+        <p className="mb-3 text-sm font-medium text-ink">Who you got?</p>
+        <TeamPicker event={event} selectionKey={selectionKey} onChange={setSelectionKey} />
       </div>
 
       <StakeInput value={stake} onChange={setStake} />

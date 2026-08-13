@@ -3,6 +3,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { recordReminder } from "@/features/settlement/lib/rpc";
 import { pickReminderCopy } from "@/lib/settlement/copy";
 import { REMINDER_SCHEDULE } from "@/lib/settlement/reminder-schedule";
+import { getSmsProvider } from "@/lib/sms";
+import { APP_NAME, SMS_OPT_OUT_SUFFIX } from "@/lib/constants";
 import { formatStake } from "@/lib/utils/currency";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +21,7 @@ interface OwedObligationRow {
   action_id: string;
   amount: number;
   created_at: string;
-  debtor: { user_id: string | null } | null;
+  debtor: { user_id: string | null; phone: string | null } | null;
   creditor: { user_id: string | null; user: { display_name: string | null } | null } | null;
 }
 
@@ -50,7 +52,7 @@ export async function GET(request: NextRequest) {
   const admin = createAdminClient();
   const OBLIGATION_SELECT = `
     id, action_id, amount, created_at,
-    debtor:participants!settlement_obligations_debtor_participant_id_fkey(user_id),
+    debtor:participants!settlement_obligations_debtor_participant_id_fkey(user_id, phone),
     creditor:participants!settlement_obligations_creditor_participant_id_fkey(user_id, user:users(display_name))
   `;
 
@@ -87,6 +89,10 @@ export async function GET(request: NextRequest) {
       title: "Still owed",
       body,
     });
+
+    if (obligation.debtor.phone) {
+      await getSmsProvider().send({ to: obligation.debtor.phone, body: `${APP_NAME}: ${body}${SMS_OPT_OUT_SUFFIX}` });
+    }
 
     summary.sent += 1;
   }

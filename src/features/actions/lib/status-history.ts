@@ -1,7 +1,8 @@
 import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { ActionStatus, ChangedByActor, Database } from "@/types/database.types";
+import type { Database } from "@/types/database.types";
+import type { ActionStatus, ChangedByActor } from "@/types/domain";
 
 /** Appends one row to action_status_history. Shared by mutations and the settlement cron. */
 export async function recordStatusChange(

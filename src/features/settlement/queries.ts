@@ -1,7 +1,7 @@
 import "server-only";
 
 import { createClient } from "@/lib/supabase/server";
-import type { PaymentSettlementStatus } from "@/types/database.types";
+import type { PaymentSettlementStatus } from "@/types/domain";
 
 /** RLS-scoped — participants can read their own Action's settlement events. */
 export async function getLastNudgeAt(obligationId: string): Promise<string | null> {

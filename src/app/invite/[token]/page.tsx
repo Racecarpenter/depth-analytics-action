@@ -7,7 +7,7 @@ import { getCurrentUser } from "@/features/auth/session";
 import { InviteResponse } from "@/features/actions/components/invite-response";
 import { verifyInviteToken } from "@/features/actions/lib/signed-token";
 import { getInvitePreview } from "@/features/actions/queries";
-import { APP_NAME, MARKET_LABELS, STAKE_DISCLAIMER } from "@/lib/constants";
+import { APP_NAME, STAKE_DISCLAIMER } from "@/lib/constants";
 import { formatStake } from "@/lib/utils/currency";
 import { formatGameTime } from "@/lib/utils/date";
 
@@ -70,6 +70,8 @@ export default async function InvitePage({
   );
 
   const isSports = action.action_type === "sports" && action.game && action.market;
+  const creatorParticipant = action.participants.find((p) => p.role === "creator");
+  const creatorName = creatorParticipant?.user?.display_name?.trim() || "Your friend";
 
   return (
     <>
@@ -86,16 +88,16 @@ export default async function InvitePage({
             {isSports && action.game && action.market ? (
               <>
                 <div>
-                  <p className="text-xs text-ink-faint">Market</p>
-                  <p className="mt-0.5 text-sm font-medium text-ink">{MARKET_LABELS[action.market]}</p>
+                  <p className="text-xs text-ink-faint">{creatorName} has</p>
+                  <p className="mono-nums mt-0.5 text-sm font-medium text-ink">{creatorParticipant?.side_label ?? "—"}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-ink-faint">Stake</p>
-                  <p className="mono-nums mt-0.5 text-sm font-medium text-ink">{formatStake(action.stake_amount)}</p>
+                  <p className="text-xs text-ink-faint">You have</p>
+                  <p className="mono-nums mt-0.5 text-sm font-medium text-ink">{participant.side_label}</p>
                 </div>
                 <div className="col-span-2">
-                  <p className="text-xs text-ink-faint">Your side</p>
-                  <p className="mono-nums mt-0.5 text-sm font-medium text-ink">{participant.side_label}</p>
+                  <p className="text-xs text-ink-faint">Action</p>
+                  <p className="mono-nums mt-0.5 text-sm font-medium text-ink">{formatStake(action.stake_amount)}</p>
                 </div>
               </>
             ) : (

@@ -6,6 +6,14 @@ import type { EntitlementSummary } from "../queries";
  * or "Action Pass Active — Expires Sep 12", nothing fancier.
  */
 export function BalanceBadge({ entitlement }: { entitlement: EntitlementSummary }) {
+  if (entitlement.error) {
+    return <p className="text-xs text-ink-faint">Action balance unavailable — refresh to try again.</p>;
+  }
+
+  if (entitlement.betaUnlimited) {
+    return <p className="text-xs text-ink-faint">Beta tester — unlimited Actions</p>;
+  }
+
   if (entitlement.activePass) {
     return (
       <p className="text-xs text-ink-faint">

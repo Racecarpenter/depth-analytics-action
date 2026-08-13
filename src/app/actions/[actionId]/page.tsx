@@ -18,7 +18,7 @@ import { PaymentSettlementCard } from "@/features/settlement/components/payment-
 import { participantDisplayName } from "@/features/settlement/lib/context";
 import { getLastNudgeAt, getObligationsForAction } from "@/features/settlement/queries";
 import { MANUAL_NUDGE_COOLDOWN_HOURS } from "@/lib/settlement/reminder-schedule";
-import { MARKET_LABELS, STAKE_DISCLAIMER } from "@/lib/constants";
+import { STAKE_DISCLAIMER } from "@/lib/constants";
 import { formatStake } from "@/lib/utils/currency";
 import { formatGameTime } from "@/lib/utils/date";
 import { maskPhone } from "@/lib/utils/phone";
@@ -100,7 +100,7 @@ export default async function ActionDetailPage({
         {isLocked && (
           <p className="mb-5 rounded-xl border border-border-subtle bg-bg-raised px-4 py-3 text-xs leading-relaxed text-ink-faint">
             This Action is locked. The{" "}
-            {action.action_type === "sports" ? "game, market, line, stake, and opponent" : "title, stake, and participants"} can
+            {action.action_type === "sports" ? "game, team picks, stake, and opponent" : "title, stake, and participants"} can
             no longer be changed.
           </p>
         )}
@@ -175,31 +175,29 @@ function SportsInfoCard({
       )}
 
       <Card className="mb-5">
-        <CardContent className="grid grid-cols-2 gap-5 pt-5">
-          <div>
-            <p className="text-xs text-ink-faint">Market</p>
-            <p className="mt-0.5 text-sm font-medium text-ink">{MARKET_LABELS[action.market]}</p>
-          </div>
-          <div>
-            <p className="text-xs text-ink-faint">Stake</p>
-            <p className="mono-nums mt-0.5 text-sm font-medium text-ink">{formatStake(action.stake_amount)}</p>
-          </div>
-          <div>
-            <p className="text-xs text-ink-faint">Your pick</p>
-            <p className="mono-nums mt-0.5 text-sm font-medium text-ink">{viewer?.side_label ?? "—"}</p>
-          </div>
-          <div>
-            <p className="text-xs text-ink-faint">Opponents pick</p>
-            <p className="mono-nums mt-0.5 text-sm font-medium text-ink">{opponent?.side_label ?? "—"}</p>
-          </div>
-          <div className="col-span-2">
-            <p className="text-xs text-ink-faint">Opponent</p>
-            <p className="mt-0.5 text-sm font-medium text-ink">
-              {opponent ? maskPhone(opponent.phone) : "—"}
-              {opponent?.status === "invited" && (
-                <span className="ml-2 text-xs font-normal text-ink-faint">Awaiting response</span>
-              )}
-            </p>
+        <CardContent className="pt-5">
+          <div className="grid grid-cols-2 gap-5">
+            <div>
+              <p className="text-xs text-ink-faint">Your team</p>
+              <p className="mono-nums mt-0.5 text-sm font-medium text-ink">{viewer?.side_label ?? "—"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-ink-faint">Opponent&apos;s team</p>
+              <p className="mono-nums mt-0.5 text-sm font-medium text-ink">{opponent?.side_label ?? "—"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-ink-faint">Stake</p>
+              <p className="mono-nums mt-0.5 text-sm font-medium text-ink">{formatStake(action.stake_amount)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-ink-faint">Opponent</p>
+              <p className="mt-0.5 text-sm font-medium text-ink">
+                {opponent ? maskPhone(opponent.phone) : "—"}
+                {opponent?.status === "invited" && (
+                  <span className="ml-2 text-xs font-normal text-ink-faint">Awaiting response</span>
+                )}
+              </p>
+            </div>
           </div>
         </CardContent>
       </Card>

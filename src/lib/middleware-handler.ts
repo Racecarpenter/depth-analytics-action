@@ -1,6 +1,6 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
-import { isValidGateToken, SITE_GATE_COOKIE } from "@/lib/utils/site-gate";
+import { ALWAYS_PUBLIC_ROUTES, isValidGateToken, SITE_GATE_COOKIE } from "@/lib/utils/site-gate";
 
 interface CookieToSet {
   name: string;
@@ -12,7 +12,11 @@ interface CookieToSet {
 // redirects to /login. The invite acceptance page handles its own
 // unauthenticated view (a person can review an Action before they sign in).
 // /coming-soon is here too since it has to render before anyone's signed in.
-const PUBLIC_ROUTES = ["/login", "/coming-soon"];
+// /privacy and /terms must always be reachable logged-out — Twilio's A2P
+// 10DLC campaign review process visits both directly. (ALWAYS_PUBLIC_ROUTES,
+// which this list includes, also drives the coming-soon gate exemption below
+// and the root layout's gate check — see src/lib/utils/site-gate.ts.)
+const PUBLIC_ROUTES = ["/login", "/coming-soon", ...ALWAYS_PUBLIC_ROUTES];
 const PUBLIC_PREFIXES = ["/invite/"];
 
 function isPublicRoute(pathname: string) {
@@ -43,6 +47,7 @@ async function checkSiteGate(request: NextRequest): Promise<NextResponse | null>
   if (!secret || !password) return null;
   if (pathname === "/coming-soon") return null;
   if (pathname.startsWith("/api/")) return null;
+  if (ALWAYS_PUBLIC_ROUTES.includes(pathname)) return null;
 
   const token = request.cookies.get(SITE_GATE_COOKIE)?.value;
   const valid = await isValidGateToken(token, secret);
@@ -64,6 +69,13 @@ export async function handleRequest(request: NextRequest): Promise<NextResponse>
   console.log('goofy ass bullshit')
   const gateRedirect = await checkSiteGate(request);
   if (gateRedirect) return gateRedirect;
+
+  // Forwarded so the root layout's own, more-authoritative gate check
+  // (src/app/layout.tsx / site-gate-server.ts) can also exempt
+  // ALWAYS_PUBLIC_ROUTES without depending on this middleware having run —
+  // if this header is ever absent there, that check just falls back to its
+  // existing (pre-this-change) behavior, not a security regression.
+  request.headers.set("x-pathname", request.nextUrl.pathname);
 
   let response = NextResponse.next({ request });
 
