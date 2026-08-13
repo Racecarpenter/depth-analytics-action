@@ -10,36 +10,52 @@ export interface ParticipantWithUser extends ParticipantRow {
 }
 
 export interface ActionWithDetails extends ActionRow {
-  game: GameRow & {
-    home_team: TeamRow;
-    away_team: TeamRow;
-  };
+  // null for Custom Actions — sports Actions always have one (action_type
+  // determines which, enforced by the action_type_fields_match DB check).
+  game:
+    | (GameRow & {
+        home_team: TeamRow;
+        away_team: TeamRow;
+      })
+    | null;
   participants: ParticipantWithUser[];
 }
 
 /**
- * Once an Action is settled, who's owed money and who owes it — derived
- * from the canonical (creator's-perspective) status, never stored
- * separately. Returns null while pending/accepted/live/declined/cancelled/
- * expired, or on a push (nobody owes anybody).
+ * Who won and who owes money, for any Action type. Deliberately keyed off
+ * `winner_participant_id` alone rather than branching on `action_type` —
+ * sports grading (src/app/api/cron/settle/route.ts) sets that column the
+ * same way unanimous custom consensus does (submit_custom_action_vote),
+ * so this function never needs to know which kind of Action it's looking
+ * at. Returns null before resolution, and permanently for a push (nobody
+ * owes anybody — no winner_participant_id is ever set on a push).
+ *
+ * `losers` is plural because a Custom Action can have up to 7 of them; for
+ * a 2-participant sports Action it's always exactly one.
  */
-export function getWinnerLoser(
-  action: Pick<ActionWithDetails, "status" | "participants">,
-): { winner: ParticipantWithUser; loser: ParticipantWithUser } | null {
-  if (action.status !== "won" && action.status !== "lost") return null;
+export function getResolution(
+  action: Pick<ActionWithDetails, "winner_participant_id" | "participants">,
+): { winner: ParticipantWithUser; losers: ParticipantWithUser[] } | null {
+  if (!action.winner_participant_id) return null;
 
-  const creator = action.participants.find((p) => p.role === "creator");
-  const opponent = action.participants.find((p) => p.role === "opponent");
-  if (!creator || !opponent) return null;
+  const winner = action.participants.find((p) => p.id === action.winner_participant_id);
+  if (!winner) return null;
 
-  return action.status === "won" ? { winner: creator, loser: opponent } : { winner: opponent, loser: creator };
+  const losers = action.participants.filter(
+    (p) => p.id !== action.winner_participant_id && p.status === "accepted",
+  );
+  if (losers.length === 0) return null;
+
+  return { winner, losers };
 }
 
 /**
- * actions.status is stored canonically from the creator's point of view.
- * Flip won/lost for the opponent so every viewer sees "did I win" — every
- * other status (push, pending, accepted, live, declined, cancelled, expired)
- * reads the same for both sides.
+ * actions.status is stored canonically from the creator's point of view
+ * for sports Actions (won/lost), flipped here for the opponent so every
+ * viewer sees "did I win." Every other status — including the custom-only
+ * 'resolved' — already reads the same for everyone, so this is a no-op for
+ * Custom Actions; they never use 'won'/'lost' at all (see getResolution
+ * for how a viewer's personal outcome is actually determined there).
  */
 export function personalStatus(status: ActionStatus, viewerRole: ParticipantRole | null): ActionStatus {
   if (viewerRole !== "opponent") return status;
@@ -55,9 +71,18 @@ export function findParticipant(
   return action.participants.find((p) => p.user_id === userId);
 }
 
+/** The other participant in a 2-participant (sports) Action. */
 export function opponentOf(
   action: Pick<ActionWithDetails, "participants">,
   userId: string,
 ): ParticipantRow | undefined {
   return action.participants.find((p) => p.user_id !== userId);
+}
+
+/** Every participant besides the viewer — for Custom Actions' N-person participant list. */
+export function otherParticipants(
+  action: Pick<ActionWithDetails, "participants">,
+  userId: string,
+): ParticipantWithUser[] {
+  return action.participants.filter((p) => p.user_id !== userId);
 }

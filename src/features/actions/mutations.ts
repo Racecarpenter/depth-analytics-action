@@ -7,7 +7,7 @@ import { createNotification } from "@/features/notifications/lib/notify";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getSportsDataProvider } from "@/lib/sports-data";
 import { getSmsProvider } from "@/lib/sms";
-import { APP_NAME } from "@/lib/constants";
+import { APP_NAME, INVITE_EXPIRY_HOURS } from "@/lib/constants";
 import { logError } from "@/lib/utils/log-error";
 import { normalizePhone } from "@/lib/utils/phone";
 import { createActionSchema } from "@/lib/validations/action";
@@ -15,7 +15,8 @@ import { consumeActionCreditOrPass, grantReferralRewardIfEligible, refundActionC
 import { logAnalyticsEvent } from "@/lib/monetization/analytics";
 import { PRICING } from "@/lib/monetization/pricing";
 import { recordStatusChange } from "./lib/status-history";
-import { createInviteToken, inviteUrl, verifyInviteToken } from "./lib/signed-token";
+import { inviteParticipant } from "./lib/invite-participant";
+import { inviteUrl, verifyInviteToken } from "./lib/signed-token";
 import { syncGameFromEvent } from "./lib/sync-game";
 
 export interface ActionMutationResult {
@@ -132,27 +133,6 @@ export async function createActionAndInvite(input: {
       throw new ActionCreationFailedError("Couldn't create the Action. Try again.");
     }
 
-    const { data: opponentUser } = await admin
-      .from("users")
-      .select("id")
-      .eq("phone", opponentPhone)
-      .maybeSingle();
-
-    // First-touch referral attribution: if this phone number isn't an
-    // Action user yet, record that this creator invited them. Best-effort
-    // and non-blocking — a failure here should never sink Action creation.
-    // ignoreDuplicates means whoever invited this number first keeps
-    // attribution; this insert is then a no-op.
-    if (!opponentUser?.id) {
-      const { error: referralError } = await admin
-        .from("referrals")
-        .upsert(
-          { inviter_user_id: currentUser.id, invitee_phone: opponentPhone },
-          { onConflict: "invitee_phone", ignoreDuplicates: true },
-        );
-      if (referralError) logError("[createActionAndInvite] referral upsert failed:", referralError);
-    }
-
     await admin.from("participants").insert({
       action_id: action.id,
       user_id: currentUser.id,
@@ -164,38 +144,28 @@ export async function createActionAndInvite(input: {
       responded_at: new Date().toISOString(),
     });
 
-    const { data: opponentParticipant, error: participantError } = await admin
-      .from("participants")
-      .insert({
-        action_id: action.id,
-        user_id: opponentUser?.id ?? null,
-        phone: opponentPhone,
-        role: "opponent",
-        status: "invited",
-        selection: opponentSelection.key,
-        side_label: opponentSelection.label,
-        invite_expires_at: new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString(),
-      })
-      .select("*")
-      .single();
+    const invited = await inviteParticipant(admin, currentUser.id, {
+      actionId: action.id,
+      phone: opponentPhone,
+      selection: opponentSelection.key,
+      sideLabel: opponentSelection.label,
+      inviteExpiryHours: INVITE_EXPIRY_HOURS,
+    });
 
-    if (participantError || !opponentParticipant) {
+    if (!invited) {
       throw new ActionCreationFailedError("Couldn't invite that number. Try again.");
     }
-
-    const token = createInviteToken(action.id, opponentParticipant.id);
-    await admin.from("participants").update({ invite_token: token }).eq("id", opponentParticipant.id);
 
     await recordStatusChange(admin, action.id, null, "pending", "creator");
 
     const matchup = `${event.awayTeam.name} @ ${event.homeTeam.name}`;
-    const inviteLink = inviteUrl(token);
+    const inviteLink = inviteUrl(invited.inviteToken);
     const smsBody = `${currentUser.display_name ?? "A friend"} challenged you on ${APP_NAME}: ${matchup} — you'd take ${opponentSelection.label}. Review it: ${inviteLink}`;
     await getSmsProvider().send({ to: opponentPhone, body: smsBody });
 
-    if (opponentUser?.id) {
+    if (invited.existingUserId) {
       await createNotification(admin, {
-        userId: opponentUser.id,
+        userId: invited.existingUserId,
         actionId: action.id,
         type: "invite_received",
         title: "New Action invite",
@@ -280,9 +250,20 @@ export async function respondToInvite(
       .eq("id", participant.id);
     await admin.from("actions").update({ status: "declined" }).eq("id", action.id);
     await recordStatusChange(admin, action.id, "pending", "declined", "opponent");
-    if (creatorParticipant?.user_id) {
+
+    // One decline cancels the whole Action (V1 keeps this simple — see the
+    // Custom Action spec) so everyone else who'd already accepted needs to
+    // know, not just the creator. For a 2-participant sports Action this
+    // is exactly the old behavior (creator is the only "everyone else").
+    const { data: otherAccepted } = await admin
+      .from("participants")
+      .select("user_id")
+      .eq("action_id", action.id)
+      .eq("status", "accepted");
+    for (const p of otherAccepted ?? []) {
+      if (!p.user_id) continue;
       await createNotification(admin, {
-        userId: creatorParticipant.user_id,
+        userId: p.user_id,
         actionId: action.id,
         type: "action_declined",
         title: "Action declined",
@@ -298,18 +279,43 @@ export async function respondToInvite(
     .from("participants")
     .update({ status: "accepted", user_id: currentUser.id, responded_at: new Date().toISOString(), invite_token: null })
     .eq("id", participant.id);
-  await admin
-    .from("actions")
-    .update({ status: "accepted", locked_at: new Date().toISOString() })
-    .eq("id", action.id);
-  await recordStatusChange(admin, action.id, "pending", "accepted", "opponent");
-  if (creatorParticipant?.user_id) {
+
+  // An Action only fully activates once every invited participant has
+  // accepted — for a 2-participant sports Action this one accept always is
+  // "everyone," identical to the old behavior. For a Custom Action with
+  // several invitees, earlier accepts just notify the creator that one
+  // more person is in; the LAST acceptance is what locks terms and
+  // notifies everyone else.
+  const { data: allParticipants } = await admin
+    .from("participants")
+    .select("user_id, status")
+    .eq("action_id", action.id);
+  const everyoneAccepted = (allParticipants ?? []).every((p) => p.status === "accepted");
+
+  if (everyoneAccepted) {
+    await admin
+      .from("actions")
+      .update({ status: "accepted", locked_at: new Date().toISOString() })
+      .eq("id", action.id);
+    await recordStatusChange(admin, action.id, "pending", "accepted", "opponent");
+
+    for (const p of allParticipants ?? []) {
+      if (!p.user_id || p.user_id === currentUser.id) continue;
+      await createNotification(admin, {
+        userId: p.user_id,
+        actionId: action.id,
+        type: "action_accepted",
+        title: "Action accepted",
+        body: "Everyone's in. It's locked in.",
+      });
+    }
+  } else if (creatorParticipant?.user_id && creatorParticipant.user_id !== currentUser.id) {
     await createNotification(admin, {
       userId: creatorParticipant.user_id,
       actionId: action.id,
       type: "action_accepted",
       title: "Action accepted",
-      body: "Your challenge was accepted. It's locked in.",
+      body: `${currentUser.display_name ?? "Someone"} accepted. Waiting on the rest.`,
     });
   }
 

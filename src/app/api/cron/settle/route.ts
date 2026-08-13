@@ -4,10 +4,10 @@ import { getSportsDataProvider } from "@/lib/sports-data";
 import { gradeSelection } from "@/features/actions/lib/settlement";
 import { recordStatusChange } from "@/features/actions/lib/status-history";
 import { syncGameFromEvent } from "@/features/actions/lib/sync-game";
-import { getWinnerLoser, personalStatus } from "@/features/actions/types";
+import { getResolution, personalStatus } from "@/features/actions/types";
 import type { ActionWithDetails } from "@/features/actions/types";
 import { notifyParticipants } from "@/features/notifications/lib/notify";
-import { markActionNotApplicable, markActionOwed } from "@/features/settlement/lib/rpc";
+import { createObligations, markActionNotApplicable } from "@/features/settlement/lib/rpc";
 import { RESULT_COPY } from "@/lib/settlement/copy";
 import { formatStake } from "@/lib/utils/currency";
 
@@ -45,7 +45,8 @@ export async function GET(request: NextRequest) {
   const { data: pendingActions } = await admin
     .from("actions")
     .select(ACTION_SELECT)
-    .eq("status", "pending");
+    .eq("status", "pending")
+    .eq("action_type", "sports");
 
   for (const action of (pendingActions ?? []) as unknown as ActionWithDetails[]) {
     const opponent = action.participants.find((p) => p.role === "opponent");
@@ -63,7 +64,8 @@ export async function GET(request: NextRequest) {
   const { data: openActions, error } = await admin
     .from("actions")
     .select(ACTION_SELECT)
-    .in("status", ["accepted", "live"]);
+    .in("status", ["accepted", "live"])
+    .eq("action_type", "sports");
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -72,6 +74,7 @@ export async function GET(request: NextRequest) {
   const actions = (openActions ?? []) as unknown as ActionWithDetails[];
   const actionsByGameId = new Map<string, ActionWithDetails[]>();
   for (const action of actions) {
+    if (!action.game_id) continue; // sports Actions always have one; guards the type only
     const list = actionsByGameId.get(action.game_id) ?? [];
     list.push(action);
     actionsByGameId.set(action.game_id, list);
@@ -79,6 +82,7 @@ export async function GET(request: NextRequest) {
 
   for (const [, gameActions] of actionsByGameId) {
     const game = gameActions[0]!.game;
+    if (!game) continue; // sports Actions always have one; guards the type only
     summary.gamesChecked += 1;
 
     const event = await provider.getEvent(game.external_id, game.league);
@@ -120,6 +124,14 @@ export async function GET(request: NextRequest) {
       const creator = action.participants.find((p) => p.role === "creator");
       if (!creator) continue;
 
+      const opponent = action.participants.find((p) => p.role === "opponent");
+
+      // Sports Actions always have market + a creator selection (enforced by
+      // the action_type_fields_match DB check) — this guard exists only to
+      // satisfy the now-nullable column types, which had to become nullable
+      // to allow Custom Actions to omit them entirely.
+      if (!action.market || !creator.selection) continue;
+
       const grade = gradeSelection({
         market: action.market,
         line: action.line,
@@ -130,9 +142,16 @@ export async function GET(request: NextRequest) {
         awayScore: result.awayScore,
       });
 
+      // winner_participant_id is the type-agnostic source of truth for
+      // "who won" (see getResolution in features/actions/types.ts) — set
+      // here the same way unanimous Custom Action consensus sets it, so
+      // every downstream reader (settlement, notifications, history) never
+      // needs to know this was a sports Action specifically. Null on a push.
+      const winnerParticipantId = grade === "won" ? creator.id : grade === "lost" ? (opponent?.id ?? null) : null;
+
       await admin
         .from("actions")
-        .update({ status: grade, resolved_at: new Date().toISOString() })
+        .update({ status: grade, resolved_at: new Date().toISOString(), winner_participant_id: winnerParticipantId })
         .eq("id", action.id);
       await recordStatusChange(admin, action.id, action.status, grade, "system", `Final: ${result.awayScore}-${result.homeScore}`);
       await notifyParticipants(admin, action, "action_settled", "Action settled", (viewerRole) => {
@@ -145,40 +164,29 @@ export async function GET(request: NextRequest) {
       // Payment settlement is a separate concern from the sports result
       // above — whether Mike covered the spread is not the same fact as
       // whether he's paid up. A push never owes anyone anything; a
-      // won/lost Action with a stake becomes "owed" and gets its own
-      // notification alongside (not instead of) the result notification
-      // above. ACTION still never touches any money here — this only
-      // records what the app believes is owed and notifies the two
-      // participants.
-      if (grade === "push") {
+      // won/lost Action with a stake creates settlement obligations and
+      // gets its own notification alongside (not instead of) the result
+      // notification above. ACTION still never touches any money here —
+      // this only records what the app believes is owed and notifies.
+      if (grade === "push" || !winnerParticipantId) {
         await markActionNotApplicable(action.id);
       } else if (action.stake_amount) {
-        const becameOwed = await markActionOwed(action.id);
-        if (becameOwed) {
-          const winnerLoser = getWinnerLoser({ status: grade, participants: action.participants });
-          if (winnerLoser) {
+        const { ok, obligationsCreated } = await createObligations(action.id, winnerParticipantId);
+        if (ok && obligationsCreated > 0) {
+          const resolution = getResolution({ winner_participant_id: winnerParticipantId, participants: action.participants });
+          if (resolution) {
             const amount = formatStake(action.stake_amount);
-            const winnerName = winnerLoser.winner.user?.display_name?.trim() || "your opponent";
-            const loserName = winnerLoser.loser.user?.display_name?.trim() || "your opponent";
-            if (winnerLoser.loser.user_id) {
-              const { title, body } = RESULT_COPY.loserOwes(winnerName, amount);
-              await admin.from("notifications").insert({
-                user_id: winnerLoser.loser.user_id,
-                action_id: action.id,
-                type: "payment_owed",
-                title,
-                body,
-              });
+            const winnerName = resolution.winner.user?.display_name?.trim() || "your opponent";
+            for (const loser of resolution.losers) {
+              if (loser.user_id) {
+                const { title, body } = RESULT_COPY.loserOwes(winnerName, amount);
+                await admin.from("notifications").insert({ user_id: loser.user_id, action_id: action.id, type: "payment_owed", title, body });
+              }
             }
-            if (winnerLoser.winner.user_id) {
+            if (resolution.winner.user_id) {
+              const loserName = resolution.losers[0]?.user?.display_name?.trim() || "your opponent";
               const { title, body } = RESULT_COPY.winnerOwed(loserName, amount);
-              await admin.from("notifications").insert({
-                user_id: winnerLoser.winner.user_id,
-                action_id: action.id,
-                type: "payment_owed",
-                title,
-                body,
-              });
+              await admin.from("notifications").insert({ user_id: resolution.winner.user_id, action_id: action.id, type: "payment_owed", title, body });
             }
           }
         }

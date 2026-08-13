@@ -35,7 +35,10 @@ export type ActionStatus =
   | "lost"
   | "push"
   | "cancelled"
-  | "expired";
+  | "expired"
+  | "resolved";
+
+export type ActionType = "sports" | "custom";
 
 export type ParticipantRole = "creator" | "opponent";
 
@@ -213,13 +216,17 @@ export interface Database {
         Row: {
           id: string;
           creator_id: string;
-          game_id: string;
-          market: MarketType;
+          action_type: ActionType;
+          game_id: string | null;
+          market: MarketType | null;
+          title: string | null;
           line: number | null;
           status: ActionStatus;
           stake_amount: number | null;
           stake_currency: string;
           stake_note: string;
+          winner_participant_id: string | null;
+          voting_round: number;
           locked_at: string | null;
           resolved_at: string | null;
           cancelled_reason: string | null;
@@ -230,13 +237,17 @@ export interface Database {
         Insert: {
           id?: string;
           creator_id: string;
-          game_id: string;
-          market: MarketType;
+          action_type?: ActionType;
+          game_id?: string | null;
+          market?: MarketType | null;
+          title?: string | null;
           line?: number | null;
           status?: ActionStatus;
           stake_amount?: number | null;
           stake_currency?: string;
           stake_note?: string;
+          winner_participant_id?: string | null;
+          voting_round?: number;
           locked_at?: string | null;
           resolved_at?: string | null;
           cancelled_reason?: string | null;
@@ -247,13 +258,17 @@ export interface Database {
         Update: {
           id?: string;
           creator_id?: string;
-          game_id?: string;
-          market?: MarketType;
+          action_type?: ActionType;
+          game_id?: string | null;
+          market?: MarketType | null;
+          title?: string | null;
           line?: number | null;
           status?: ActionStatus;
           stake_amount?: number | null;
           stake_currency?: string;
           stake_note?: string;
+          winner_participant_id?: string | null;
+          voting_round?: number;
           locked_at?: string | null;
           resolved_at?: string | null;
           cancelled_reason?: string | null;
@@ -276,6 +291,13 @@ export interface Database {
             referencedRelation: "users";
             referencedColumns: ["id"];
           },
+          {
+            foreignKeyName: "actions_winner_participant_id_fkey";
+            columns: ["winner_participant_id"];
+            isOneToOne: false;
+            referencedRelation: "participants";
+            referencedColumns: ["id"];
+          },
         ];
       };
       participants: {
@@ -286,8 +308,8 @@ export interface Database {
           phone: string;
           role: ParticipantRole;
           status: ParticipantStatus;
-          selection: string;
-          side_label: string;
+          selection: string | null;
+          side_label: string | null;
           invite_token: string | null;
           invite_expires_at: string | null;
           invited_at: string;
@@ -301,8 +323,8 @@ export interface Database {
           phone: string;
           role: ParticipantRole;
           status?: ParticipantStatus;
-          selection: string;
-          side_label: string;
+          selection?: string | null;
+          side_label?: string | null;
           invite_token?: string | null;
           invite_expires_at?: string | null;
           invited_at?: string;
@@ -316,8 +338,8 @@ export interface Database {
           phone?: string;
           role?: ParticipantRole;
           status?: ParticipantStatus;
-          selection?: string;
-          side_label?: string;
+          selection?: string | null;
+          side_label?: string | null;
           invite_token?: string | null;
           invite_expires_at?: string | null;
           invited_at?: string;
@@ -337,6 +359,113 @@ export interface Database {
             columns: ["user_id"];
             isOneToOne: false;
             referencedRelation: "users";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      custom_action_votes: {
+        Row: {
+          id: string;
+          action_id: string;
+          round: number;
+          voter_participant_id: string;
+          selected_participant_id: string;
+          proof_photo_path: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          action_id: string;
+          round: number;
+          voter_participant_id: string;
+          selected_participant_id: string;
+          proof_photo_path?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          action_id?: string;
+          round?: number;
+          voter_participant_id?: string;
+          selected_participant_id?: string;
+          proof_photo_path?: string | null;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "custom_action_votes_action_id_fkey";
+            columns: ["action_id"];
+            isOneToOne: false;
+            referencedRelation: "actions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "custom_action_votes_voter_participant_id_fkey";
+            columns: ["voter_participant_id"];
+            isOneToOne: false;
+            referencedRelation: "participants";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "custom_action_votes_selected_participant_id_fkey";
+            columns: ["selected_participant_id"];
+            isOneToOne: false;
+            referencedRelation: "participants";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      settlement_obligations: {
+        Row: {
+          id: string;
+          action_id: string;
+          debtor_participant_id: string;
+          creditor_participant_id: string;
+          amount: number;
+          payment_status: PaymentSettlementStatus;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          action_id: string;
+          debtor_participant_id: string;
+          creditor_participant_id: string;
+          amount: number;
+          payment_status?: PaymentSettlementStatus;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          action_id?: string;
+          debtor_participant_id?: string;
+          creditor_participant_id?: string;
+          amount?: number;
+          payment_status?: PaymentSettlementStatus;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "settlement_obligations_action_id_fkey";
+            columns: ["action_id"];
+            isOneToOne: false;
+            referencedRelation: "actions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "settlement_obligations_debtor_participant_id_fkey";
+            columns: ["debtor_participant_id"];
+            isOneToOne: false;
+            referencedRelation: "participants";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "settlement_obligations_creditor_participant_id_fkey";
+            columns: ["creditor_participant_id"];
+            isOneToOne: false;
+            referencedRelation: "participants";
             referencedColumns: ["id"];
           },
         ];
@@ -431,6 +560,7 @@ export interface Database {
         Row: {
           id: string;
           action_id: string;
+          obligation_id: string | null;
           event_type: PaymentSettlementEventType;
           actor_user_id: string | null;
           metadata: Json;
@@ -439,6 +569,7 @@ export interface Database {
         Insert: {
           id?: string;
           action_id: string;
+          obligation_id?: string | null;
           event_type: PaymentSettlementEventType;
           actor_user_id?: string | null;
           metadata?: Json;
@@ -447,6 +578,7 @@ export interface Database {
         Update: {
           id?: string;
           action_id?: string;
+          obligation_id?: string | null;
           event_type?: PaymentSettlementEventType;
           actor_user_id?: string | null;
           metadata?: Json;
@@ -458,6 +590,13 @@ export interface Database {
             columns: ["action_id"];
             isOneToOne: false;
             referencedRelation: "actions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "payment_settlement_events_obligation_id_fkey";
+            columns: ["obligation_id"];
+            isOneToOne: false;
+            referencedRelation: "settlement_obligations";
             referencedColumns: ["id"];
           },
           {
@@ -765,33 +904,52 @@ export interface Database {
         Args: { p_user_id: string; p_action_id: string; p_reward_amount: number };
         Returns: { granted: boolean; inviter_user_id: string | null }[];
       };
-      settlement_mark_owed: {
-        Args: { p_action_id: string };
-        Returns: { ok: boolean }[];
+      settlement_create_obligations: {
+        Args: { p_action_id: string; p_winner_participant_id: string };
+        Returns: { ok: boolean; obligations_created: number }[];
       };
       settlement_mark_not_applicable: {
         Args: { p_action_id: string };
         Returns: { ok: boolean }[];
       };
       settlement_mark_paid: {
-        Args: { p_action_id: string; p_actor_user_id: string };
+        Args: { p_obligation_id: string; p_actor_user_id: string };
         Returns: { ok: boolean; error: string | null }[];
       };
       settlement_confirm_received: {
-        Args: { p_action_id: string; p_actor_user_id: string };
+        Args: { p_obligation_id: string; p_actor_user_id: string };
         Returns: { ok: boolean; error: string | null }[];
       };
       settlement_dispute: {
-        Args: { p_action_id: string; p_actor_user_id: string };
+        Args: { p_obligation_id: string; p_actor_user_id: string };
         Returns: { ok: boolean; error: string | null }[];
       };
       settlement_record_reminder: {
-        Args: { p_action_id: string; p_event_type: PaymentSettlementEventType };
+        Args: { p_obligation_id: string; p_event_type: PaymentSettlementEventType };
         Returns: { sent: boolean }[];
       };
       settlement_record_nudge: {
-        Args: { p_action_id: string; p_actor_user_id: string };
+        Args: { p_obligation_id: string; p_actor_user_id: string };
         Returns: { ok: boolean; error: string | null; next_available_at: string | null }[];
+      };
+      submit_custom_action_vote: {
+        Args: {
+          p_action_id: string;
+          p_voter_user_id: string;
+          p_selected_participant_id: string;
+          p_proof_photo_path?: string | null;
+        };
+        Returns: {
+          ok: boolean;
+          error: string | null;
+          all_voted: boolean;
+          unanimous: boolean | null;
+          winner_participant_id: string | null;
+        }[];
+      };
+      revote_custom_action: {
+        Args: { p_action_id: string; p_actor_user_id: string };
+        Returns: { ok: boolean; error: string | null }[];
       };
     };
     Enums: {
@@ -808,6 +966,7 @@ export interface Database {
       purchase_status: PurchaseStatus;
       payment_settlement_status: PaymentSettlementStatus;
       payment_settlement_event_type: PaymentSettlementEventType;
+      action_type: ActionType;
     };
     CompositeTypes: Record<string, never>;
   };

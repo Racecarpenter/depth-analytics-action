@@ -9,7 +9,7 @@ import type { PaymentSettlementStatus } from "@/types/database.types";
 import { confirmPaymentReceived, disputePaymentReceipt, markActionPaid, sendNudge } from "../mutations";
 
 export interface PaymentSettlementCardProps {
-  actionId: string;
+  obligationId: string;
   paymentStatus: Exclude<PaymentSettlementStatus, "not_applicable">;
   viewerRole: "winner" | "loser";
   amount: string;
@@ -29,7 +29,7 @@ type Action = "mark_paid" | "confirm" | "dispute" | "nudge";
  * payment_status is "not_applicable" (pushes/cancels never owe anything).
  */
 export function PaymentSettlementCard({
-  actionId,
+  obligationId,
   paymentStatus,
   viewerRole,
   amount,
@@ -87,7 +87,7 @@ export function PaymentSettlementCard({
                   className="flex-1 tap-target"
                   isLoading={isPending && pendingAction === "mark_paid"}
                   disabled={isPending}
-                  onClick={() => run("mark_paid", () => markActionPaid(actionId))}
+                  onClick={() => run("mark_paid", () => markActionPaid(obligationId))}
                 >
                   Mark as Paid
                 </Button>
@@ -118,7 +118,7 @@ export function PaymentSettlementCard({
                 className="w-full tap-target"
                 isLoading={isPending && pendingAction === "nudge"}
                 disabled={isPending}
-                onClick={() => run("nudge", () => sendNudge(actionId))}
+                onClick={() => run("nudge", () => sendNudge(obligationId))}
               >
                 Nudge {loserName}
               </Button>
@@ -144,7 +144,7 @@ export function PaymentSettlementCard({
                 className="flex-1 tap-target"
                 isLoading={isPending && pendingAction === "dispute"}
                 disabled={isPending}
-                onClick={() => run("dispute", () => disputePaymentReceipt(actionId))}
+                onClick={() => run("dispute", () => disputePaymentReceipt(obligationId))}
               >
                 Didn&apos;t Receive It
               </Button>
@@ -152,7 +152,7 @@ export function PaymentSettlementCard({
                 className="flex-1 tap-target"
                 isLoading={isPending && pendingAction === "confirm"}
                 disabled={isPending}
-                onClick={() => run("confirm", () => confirmPaymentReceived(actionId))}
+                onClick={() => run("confirm", () => confirmPaymentReceived(obligationId))}
               >
                 Confirm Received
               </Button>
@@ -184,7 +184,7 @@ export function PaymentSettlementCard({
                 className="mt-4 w-full tap-target"
                 isLoading={isPending && pendingAction === "confirm"}
                 disabled={isPending}
-                onClick={() => run("confirm", () => confirmPaymentReceived(actionId))}
+                onClick={() => run("confirm", () => confirmPaymentReceived(obligationId))}
               >
                 Confirm Received
               </Button>

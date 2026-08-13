@@ -30,7 +30,10 @@ export default async function InvitePage({
 
   const { participant, action } = preview;
   const currentUser = await getCurrentUser();
-  const matchup = `${action.game.away_team.name} @ ${action.game.home_team.name}`;
+  const headline =
+    action.action_type === "sports" && action.game
+      ? `${action.game.away_team.name} @ ${action.game.home_team.name}`
+      : (action.title ?? "Custom Action");
 
   if (!currentUser) {
     return (
@@ -38,7 +41,7 @@ export default async function InvitePage({
         <div className="w-full max-w-sm">
           <div className="mb-8 text-center">
             <p className="text-xs uppercase tracking-wide text-ink-faint">{APP_NAME} challenge</p>
-            <h1 className="mt-2 text-xl font-semibold text-ink">{matchup}</h1>
+            <h1 className="mt-2 text-xl font-semibold text-ink">{headline}</h1>
             <p className="mt-1 text-sm text-ink-faint">Verify your phone to review and respond.</p>
           </div>
           <AuthFlow redirectTo={`/invite/${token}`} />
@@ -66,28 +69,47 @@ export default async function InvitePage({
     participant.invite_expires_at && new Date(participant.invite_expires_at) < new Date(),
   );
 
+  const isSports = action.action_type === "sports" && action.game && action.market;
+
   return (
     <>
       <AppHeader />
       <PageContainer>
-        <p className="text-xs uppercase tracking-wide text-ink-faint">Youve been challenged</p>
-        <h1 className="mt-1 text-xl font-semibold text-ink">{matchup}</h1>
-        <p className="mt-0.5 text-sm text-ink-faint">{formatGameTime(action.game.start_time)}</p>
+        <p className="text-xs uppercase tracking-wide text-ink-faint">
+          {isSports ? "Youve been challenged" : "Youve been invited"}
+        </p>
+        <h1 className="mt-1 text-xl font-semibold text-ink">{headline}</h1>
+        {isSports && action.game && <p className="mt-0.5 text-sm text-ink-faint">{formatGameTime(action.game.start_time)}</p>}
 
         <Card className="my-5">
           <CardContent className="grid grid-cols-2 gap-5 pt-5">
-            <div>
-              <p className="text-xs text-ink-faint">Market</p>
-              <p className="mt-0.5 text-sm font-medium text-ink">{MARKET_LABELS[action.market]}</p>
-            </div>
-            <div>
-              <p className="text-xs text-ink-faint">Stake</p>
-              <p className="mono-nums mt-0.5 text-sm font-medium text-ink">{formatStake(action.stake_amount)}</p>
-            </div>
-            <div className="col-span-2">
-              <p className="text-xs text-ink-faint">Your side</p>
-              <p className="mono-nums mt-0.5 text-sm font-medium text-ink">{participant.side_label}</p>
-            </div>
+            {isSports && action.game && action.market ? (
+              <>
+                <div>
+                  <p className="text-xs text-ink-faint">Market</p>
+                  <p className="mt-0.5 text-sm font-medium text-ink">{MARKET_LABELS[action.market]}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-ink-faint">Stake</p>
+                  <p className="mono-nums mt-0.5 text-sm font-medium text-ink">{formatStake(action.stake_amount)}</p>
+                </div>
+                <div className="col-span-2">
+                  <p className="text-xs text-ink-faint">Your side</p>
+                  <p className="mono-nums mt-0.5 text-sm font-medium text-ink">{participant.side_label}</p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <p className="text-xs text-ink-faint">Stake (each)</p>
+                  <p className="mono-nums mt-0.5 text-sm font-medium text-ink">{formatStake(action.stake_amount)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-ink-faint">Players</p>
+                  <p className="mono-nums mt-0.5 text-sm font-medium text-ink">{action.participants.length}</p>
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
 

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { normalizePhone } from "@/lib/utils/phone";
+import { CUSTOM_ACTION_TITLE_MAX_LENGTH } from "@/lib/constants";
 
 export const marketTypeSchema = z.enum(["moneyline", "spread", "total"]);
 
@@ -32,5 +33,22 @@ export const inviteSchema = z.object({
     }),
 });
 
+/**
+ * A Custom Action's stake is equal-per-participant and, unlike sports
+ * Actions, mandatory (there's no "no stake" version of a winner-take-all
+ * pot). Phone numbers are validated separately in the mutation, matching
+ * how the single opponent phone on a sports Action is handled inline
+ * rather than through this schema.
+ */
+export const createCustomActionSchema = z.object({
+  title: z
+    .string()
+    .trim()
+    .min(1, "Add a title.")
+    .max(CUSTOM_ACTION_TITLE_MAX_LENGTH, "Keep the title a bit shorter."),
+  stakeAmount: z.coerce.number().positive("Enter a stake amount.").max(1_000_000),
+});
+
 export type CreateActionInput = z.input<typeof createActionSchema>;
 export type InviteInput = z.input<typeof inviteSchema>;
+export type CreateCustomActionInput = z.input<typeof createCustomActionSchema>;

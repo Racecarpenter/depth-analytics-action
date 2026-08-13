@@ -6,14 +6,16 @@ import type { ReminderEventType } from "@/lib/settlement/reminder-schedule";
 
 /**
  * Thin wrappers around the SECURITY DEFINER RPCs in
- * supabase/migrations/0007_payment_settlement.sql. Every actual state
- * transition and every authorization rule ("only the loser can mark paid,"
- * "only the winner can confirm," rate limiting, idempotency) lives in
- * those Postgres functions, not here — these wrappers exist so the calling
- * code (mutations.ts, the two cron routes) doesn't repeat `admin.rpc(...)`
- * boilerplate and error handling five times over. Not "use server" — these
- * are server-to-server helpers only, and both RPCs are revoked from
- * anon/authenticated at the database level regardless.
+ * supabase/migrations/0007_payment_settlement.sql and
+ * 0011_settlement_obligations.sql. Every actual state transition and every
+ * authorization rule lives in those Postgres functions, not here. Not
+ * "use server" — these are server-to-server helpers only, and every RPC is
+ * revoked from anon/authenticated at the database level regardless.
+ *
+ * Settlement is obligation-scoped, not Action-scoped: a 2-participant
+ * sports Action always has exactly one obligation (so behaves identically
+ * to the pre-Custom-Action design), but a Custom Action can have up to 7,
+ * each independently owed/paid/confirmed/disputed/nudged/reminded.
  */
 
 export interface SettlementActionResult {
@@ -28,26 +30,38 @@ function mapRpcError(code?: string | null): string {
     case "not_winner":
       return "Only the person who's owed can do that.";
     case "invalid_state":
-      return "This Action's payment status already changed.";
+      return "This obligation's payment status already changed.";
     case "not_found":
-      return "This Action no longer exists.";
+      return "This isn't there anymore.";
     default:
       return "Something went wrong. Try again.";
   }
 }
 
-/** System-only — called right after grading a won/lost Action with a stake. */
-export async function markActionOwed(actionId: string): Promise<boolean> {
+/**
+ * System-only — called once a winner is determined (sports grading or
+ * unanimous custom consensus). Creates one obligation per non-winning
+ * accepted participant. Idempotent: a second call for the same Action is a
+ * no-op (returns ok: false) since obligations already exist.
+ */
+export async function createObligations(
+  actionId: string,
+  winnerParticipantId: string,
+): Promise<{ ok: boolean; obligationsCreated: number }> {
   const admin = createAdminClient();
-  const { data, error } = await admin.rpc("settlement_mark_owed", { p_action_id: actionId });
+  const { data, error } = await admin.rpc("settlement_create_obligations", {
+    p_action_id: actionId,
+    p_winner_participant_id: winnerParticipantId,
+  });
   if (error) {
-    logError("[markActionOwed] RPC failed:", error);
-    return false;
+    logError("[createObligations] RPC failed:", error);
+    return { ok: false, obligationsCreated: 0 };
   }
-  return data?.[0]?.ok ?? false;
+  const result = data?.[0];
+  return { ok: result?.ok ?? false, obligationsCreated: result?.obligations_created ?? 0 };
 }
 
-/** System-only — called on push/cancel/expire. */
+/** System-only — called on push/cancel/expire/decline. */
 export async function markActionNotApplicable(actionId: string): Promise<boolean> {
   const admin = createAdminClient();
   const { data, error } = await admin.rpc("settlement_mark_not_applicable", { p_action_id: actionId });
@@ -58,11 +72,11 @@ export async function markActionNotApplicable(actionId: string): Promise<boolean
   return data?.[0]?.ok ?? false;
 }
 
-/** Loser only. */
-export async function markPaid(actionId: string, actorUserId: string): Promise<SettlementActionResult> {
+/** Debtor only. */
+export async function markPaid(obligationId: string, actorUserId: string): Promise<SettlementActionResult> {
   const admin = createAdminClient();
   const { data, error } = await admin.rpc("settlement_mark_paid", {
-    p_action_id: actionId,
+    p_obligation_id: obligationId,
     p_actor_user_id: actorUserId,
   });
   if (error) {
@@ -74,11 +88,11 @@ export async function markPaid(actionId: string, actorUserId: string): Promise<S
   return { ok: true };
 }
 
-/** Winner only. */
-export async function confirmReceived(actionId: string, actorUserId: string): Promise<SettlementActionResult> {
+/** Creditor only. */
+export async function confirmReceived(obligationId: string, actorUserId: string): Promise<SettlementActionResult> {
   const admin = createAdminClient();
   const { data, error } = await admin.rpc("settlement_confirm_received", {
-    p_action_id: actionId,
+    p_obligation_id: obligationId,
     p_actor_user_id: actorUserId,
   });
   if (error) {
@@ -90,11 +104,11 @@ export async function confirmReceived(actionId: string, actorUserId: string): Pr
   return { ok: true };
 }
 
-/** Winner only. */
-export async function disputePayment(actionId: string, actorUserId: string): Promise<SettlementActionResult> {
+/** Creditor only. */
+export async function disputePayment(obligationId: string, actorUserId: string): Promise<SettlementActionResult> {
   const admin = createAdminClient();
   const { data, error } = await admin.rpc("settlement_dispute", {
-    p_action_id: actionId,
+    p_obligation_id: obligationId,
     p_actor_user_id: actorUserId,
   });
   if (error) {
@@ -106,11 +120,11 @@ export async function disputePayment(actionId: string, actorUserId: string): Pro
   return { ok: true };
 }
 
-/** System-only — called from the payment-reminders cron. Returns whether this call actually sent something (false if that level already went out). */
-export async function recordReminder(actionId: string, eventType: ReminderEventType): Promise<boolean> {
+/** System-only — called from the payment-reminders cron. Returns whether this call actually sent something. */
+export async function recordReminder(obligationId: string, eventType: ReminderEventType): Promise<boolean> {
   const admin = createAdminClient();
   const { data, error } = await admin.rpc("settlement_record_reminder", {
-    p_action_id: actionId,
+    p_obligation_id: obligationId,
     p_event_type: eventType,
   });
   if (error) {
@@ -126,11 +140,11 @@ export interface NudgeResult {
   nextAvailableAt?: string;
 }
 
-/** Winner only, rate-limited to one per 12h per Action (enforced in the RPC). */
-export async function recordNudge(actionId: string, actorUserId: string): Promise<NudgeResult> {
+/** Creditor only, rate-limited to one per 12h per obligation (enforced in the RPC). */
+export async function recordNudge(obligationId: string, actorUserId: string): Promise<NudgeResult> {
   const admin = createAdminClient();
   const { data, error } = await admin.rpc("settlement_record_nudge", {
-    p_action_id: actionId,
+    p_obligation_id: obligationId,
     p_actor_user_id: actorUserId,
   });
   if (error) {

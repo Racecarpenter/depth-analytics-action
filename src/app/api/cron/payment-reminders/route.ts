@@ -1,7 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getWinnerLoser } from "@/features/actions/types";
-import type { ActionWithDetails } from "@/features/actions/types";
 import { recordReminder } from "@/features/settlement/lib/rpc";
 import { pickReminderCopy } from "@/lib/settlement/copy";
 import { REMINDER_SCHEDULE } from "@/lib/settlement/reminder-schedule";
@@ -16,20 +14,33 @@ function isAuthorized(request: NextRequest): boolean {
   return header === `Bearer ${secret}`;
 }
 
+interface OwedObligationRow {
+  id: string;
+  action_id: string;
+  amount: number;
+  created_at: string;
+  debtor: { user_id: string | null } | null;
+  creditor: { user_id: string | null; user: { display_name: string | null } | null } | null;
+}
+
 /**
  * Automatic payment nudges — separate route from /api/cron/settle on
  * purpose, even though it runs on the same 5-minute cadence (see
  * vercel.json): sports grading and payment nagging are different jobs and
  * shouldn't be able to break each other.
  *
- * For every Action with payment_status = 'owed', sends the highest
- * reminder threshold (src/lib/settlement/reminder-schedule.ts) that's been
- * crossed since resolved_at and hasn't gone out yet — checking thresholds
- * highest-first means a missed run doesn't burst-send every level at once,
- * just the most relevant one. Idempotent via settlement_record_reminder
- * (partial unique index per action/level), so an overlapping or retried
- * run can't double-send. Stops entirely once payment_status leaves 'owed'
- * (paid, disputed, or settled) — this query just never selects those rows.
+ * Obligation-scoped, not Action-scoped: a Custom Action with 3 unpaid
+ * losers gets 3 independent reminder schedules, each starting from that
+ * specific obligation's own created_at (the moment it was created, which
+ * for both sports and custom happens the instant a winner is determined —
+ * see settlement_create_obligations). Sends the highest reminder threshold
+ * (src/lib/settlement/reminder-schedule.ts) crossed since then and not yet
+ * sent — checking thresholds highest-first means a missed run doesn't
+ * burst-send every level at once. Idempotent per (obligation, level) via
+ * settlement_record_reminder. Stops entirely once an obligation leaves
+ * 'owed' (paid, disputed, or settled) — this query just never selects it
+ * again, and that's independent per obligation: Race paying doesn't affect
+ * Chris's schedule.
  */
 export async function GET(request: NextRequest) {
   if (!isAuthorized(request)) {
@@ -37,9 +48,16 @@ export async function GET(request: NextRequest) {
   }
 
   const admin = createAdminClient();
-  const ACTION_SELECT = `*, game:games(*, home_team:teams!games_home_team_id_fkey(*), away_team:teams!games_away_team_id_fkey(*)), participants(*, user:users(id, display_name, cashtag))`;
+  const OBLIGATION_SELECT = `
+    id, action_id, amount, created_at,
+    debtor:participants!settlement_obligations_debtor_participant_id_fkey(user_id),
+    creditor:participants!settlement_obligations_creditor_participant_id_fkey(user_id, user:users(display_name))
+  `;
 
-  const { data: owedActions, error } = await admin.from("actions").select(ACTION_SELECT).eq("payment_status", "owed");
+  const { data: owedObligations, error } = await admin
+    .from("settlement_obligations")
+    .select(OBLIGATION_SELECT)
+    .eq("payment_status", "owed");
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -47,26 +65,24 @@ export async function GET(request: NextRequest) {
 
   const summary = { checked: 0, sent: 0 };
 
-  for (const action of (owedActions ?? []) as unknown as ActionWithDetails[]) {
+  for (const obligation of (owedObligations ?? []) as unknown as OwedObligationRow[]) {
     summary.checked += 1;
-    if (!action.resolved_at || !action.stake_amount) continue;
 
-    const hoursSinceOwed = (Date.now() - new Date(action.resolved_at).getTime()) / 3_600_000;
+    const hoursSinceOwed = (Date.now() - new Date(obligation.created_at).getTime()) / 3_600_000;
     const level = REMINDER_SCHEDULE.find((l) => hoursSinceOwed >= l.hoursAfterOwed);
     if (!level) continue;
 
-    const sent = await recordReminder(action.id, level.eventType);
+    const sent = await recordReminder(obligation.id, level.eventType);
     if (!sent) continue;
 
-    const winnerLoser = getWinnerLoser({ status: action.status, participants: action.participants });
-    if (!winnerLoser?.loser.user_id) continue;
+    if (!obligation.debtor?.user_id) continue;
 
-    const winnerName = winnerLoser.winner.user?.display_name?.trim() || "your opponent";
-    const body = pickReminderCopy(level.eventType, winnerName, formatStake(action.stake_amount));
+    const winnerName = obligation.creditor?.user?.display_name?.trim() || "your opponent";
+    const body = pickReminderCopy(level.eventType, winnerName, formatStake(obligation.amount));
 
     await admin.from("notifications").insert({
-      user_id: winnerLoser.loser.user_id,
-      action_id: action.id,
+      user_id: obligation.debtor.user_id,
+      action_id: obligation.action_id,
       type: "payment_reminder",
       title: "Still owed",
       body,
