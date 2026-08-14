@@ -11,6 +11,14 @@ export function logError(label: string, error: unknown) {
   if (error && typeof error === "object") {
     const e = error as Record<string, unknown>;
     const plain = {
+      // Spread first: picks up every own enumerable property on plain
+      // object literals (e.g. TwilioSmsProvider's { status, body }) — the
+      // named fields below used to be the *only* thing that survived,
+      // silently dropping anything else (like Twilio's actual error body).
+      ...e,
+      // Named explicitly too, since these specific fields on real
+      // Error/PostgrestError/AuthError instances are sometimes
+      // non-enumerable prototype getters that a spread alone won't pick up.
       name: e.name,
       message: e.message,
       code: e.code,
