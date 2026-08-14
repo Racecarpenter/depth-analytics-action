@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { HowItWorksTrigger } from "@/components/how-it-works/how-it-works-trigger";
 import { SMS_DISCLOSURE_TEXT } from "@/lib/constants";
 
 export function PhoneForm({
@@ -42,6 +43,9 @@ export function PhoneForm({
       <Button type="submit" className="w-full tap-target" size="lg" isLoading={isPending}>
         Send code
       </Button>
+      <div className="text-center">
+        <HowItWorksTrigger />
+      </div>
       <p className="text-xs leading-relaxed text-ink-faint">
         {SMS_DISCLOSURE_TEXT}{" "}
         <Link href="/terms" target="_blank" className="underline underline-offset-2 hover:text-ink-muted">

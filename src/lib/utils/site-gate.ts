@@ -15,14 +15,15 @@ export const SITE_GATE_COOKIE = "action_gate";
 const GATE_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 
 /**
- * Routes that must render even if the coming-soon password gate is active —
- * currently just the two public legal pages, since Twilio's A2P 10DLC
- * campaign review visits them directly and can't be expected to know a
- * pre-launch password. Read by both the middleware gate check
+ * Routes that must render even if the coming-soon password gate is active.
+ * /privacy and /terms: Twilio's A2P 10DLC campaign review visits them
+ * directly and can't be expected to know a pre-launch password. /how-it-works:
+ * meant to be a shareable link (beta invites, socials) independent of
+ * whether the gate is on. Read by both the middleware gate check
  * (middleware-handler.ts) and the root layout's authoritative gate check
  * (site-gate-server.ts / app/layout.tsx).
  */
-export const ALWAYS_PUBLIC_ROUTES = ["/privacy", "/terms"];
+export const ALWAYS_PUBLIC_ROUTES = ["/privacy", "/terms", "/how-it-works"];
 
 function toBase64Url(bytes: ArrayBuffer): string {
   const binary = String.fromCharCode(...new Uint8Array(bytes));
