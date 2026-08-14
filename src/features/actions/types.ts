@@ -6,7 +6,7 @@ export type GameRow = Tables<"games">;
 export type TeamRow = Tables<"teams">;
 
 export interface ParticipantWithUser extends ParticipantRow {
-  user: Pick<Tables<"users">, "id" | "display_name" | "cashtag"> | null;
+  user: Pick<Tables<"users">, "id" | "display_name" | "username" | "avatar_path" | "cashtag"> | null;
 }
 
 export interface ActionWithDetails extends ActionRow {
@@ -71,11 +71,15 @@ export function findParticipant(
   return action.participants.find((p) => p.user_id === userId);
 }
 
-/** The other participant in a 2-participant (sports) Action. */
+/**
+ * The other participant in a 2-participant (sports) Action. Returns
+ * ParticipantWithUser (not just ParticipantRow) — callers rely on
+ * `.user` to resolve identity (see features/users/lib/identity.ts).
+ */
 export function opponentOf(
   action: Pick<ActionWithDetails, "participants">,
   userId: string,
-): ParticipantRow | undefined {
+): ParticipantWithUser | undefined {
   return action.participants.find((p) => p.user_id !== userId);
 }
 
@@ -85,4 +89,20 @@ export function otherParticipants(
   userId: string,
 ): ParticipantWithUser[] {
   return action.participants.filter((p) => p.user_id !== userId);
+}
+
+/**
+ * Whether the viewer currently has an outstanding Accept/Decline decision on
+ * this Action — the one piece of "what do I need to do here" that isn't
+ * already derived somewhere else (voting availability lives in
+ * VotingPanel/getVoteCountForRound, settlement command availability lives in
+ * PaymentSettlementCard/ObligationList, both driven directly off server
+ * state already). Used by both the Action detail page (to show Accept/
+ * Decline) and ActionCard (to badge it on Home) so the two never disagree
+ * about what counts as "needs your response."
+ */
+export function canRespondToInvite(action: Pick<ActionWithDetails, "status" | "participants">, viewerId: string): boolean {
+  if (action.status !== "pending") return false;
+  const viewer = findParticipant(action, viewerId);
+  return viewer?.status === "invited";
 }

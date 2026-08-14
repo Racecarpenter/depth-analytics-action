@@ -2,10 +2,14 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PersonPicker } from "@/features/users/components/person-picker";
+import { getAvatarUrl } from "@/features/users/lib/identity";
+import type { PersonSummary } from "@/features/users/queries";
 import { CUSTOM_ACTION_MAX_PARTICIPANTS, CUSTOM_ACTION_TITLE_MAX_LENGTH, STAKE_DISCLAIMER } from "@/lib/constants";
 import { formatStake } from "@/lib/utils/currency";
 import { createCustomActionAndInvite } from "../mutations";
@@ -15,22 +19,35 @@ const MAX_OPPONENTS = CUSTOM_ACTION_MAX_PARTICIPANTS - 1;
 export function CustomActionBuilder() {
   const [title, setTitle] = useState("");
   const [stake, setStake] = useState("");
+  const [selectedPeople, setSelectedPeople] = useState<PersonSummary[]>([]);
+  const [hasPickerHistory, setHasPickerHistory] = useState(false);
   const [phones, setPhones] = useState<string[]>([""]);
   const [error, setError] = useState<string | undefined>();
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
 
   const filledPhones = phones.map((p) => p.trim()).filter(Boolean);
-  const participantCount = 1 + filledPhones.length;
+  const opponentCount = selectedPeople.length + filledPhones.length;
+  const participantCount = 1 + opponentCount;
+  const remainingSlots = MAX_OPPONENTS - opponentCount;
   const stakeNumber = Number(stake);
   const hasValidStake = stake.trim() !== "" && Number.isFinite(stakeNumber) && stakeNumber > 0;
+
+  function addPerson(person: PersonSummary) {
+    if (opponentCount >= MAX_OPPONENTS) return;
+    setSelectedPeople((prev) => (prev.some((p) => p.userId === person.userId) ? prev : [...prev, person]));
+  }
+
+  function removePerson(userId: string) {
+    setSelectedPeople((prev) => prev.filter((p) => p.userId !== userId));
+  }
 
   function updatePhone(index: number, value: string) {
     setPhones((prev) => prev.map((p, i) => (i === index ? value : p)));
   }
 
   function addPhone() {
-    if (phones.length >= MAX_OPPONENTS) return;
+    if (opponentCount >= MAX_OPPONENTS) return;
     setPhones((prev) => [...prev, ""]);
   }
 
@@ -48,7 +65,7 @@ export function CustomActionBuilder() {
       setError("Enter a stake amount.");
       return;
     }
-    if (filledPhones.length === 0) {
+    if (opponentCount === 0) {
       setError("Add at least one opponent.");
       return;
     }
@@ -58,6 +75,7 @@ export function CustomActionBuilder() {
         title: title.trim(),
         stakeAmount: stakeNumber,
         opponentPhones: filledPhones,
+        opponentUserIds: selectedPeople.map((p) => p.userId),
       });
       if (!result.ok) {
         if (result.paywallRequired) {
@@ -104,6 +122,53 @@ export function CustomActionBuilder() {
 
       <div>
         <Label>Participants</Label>
+
+        {selectedPeople.length > 0 && (
+          <div className="mb-3 space-y-2">
+            {selectedPeople.map((person) => (
+              <div
+                key={person.userId}
+                className="flex items-center justify-between rounded-xl border border-border-strong bg-bg-raised px-3 py-2"
+              >
+                <div className="flex items-center gap-2.5">
+                  <Avatar url={getAvatarUrl(person.avatarPath)} label={person.displayName ?? "?"} size="sm" />
+                  <div>
+                    <p className="text-sm font-medium text-ink">{person.displayName ?? "Unnamed"}</p>
+                    {person.username && <p className="text-xs text-ink-faint">@{person.username}</p>}
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => removePerson(person.userId)}
+                  aria-label={`Remove ${person.displayName ?? "person"}`}
+                >
+                  ✕
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {opponentCount < MAX_OPPONENTS && (
+          <div className="mb-4">
+            <PersonPicker
+              onSelect={addPerson}
+              excludeUserIds={selectedPeople.map((p) => p.userId)}
+              onHasHistoryChange={setHasPickerHistory}
+            />
+          </div>
+        )}
+
+        {hasPickerHistory && (
+          <div className="mb-4 flex items-center gap-3">
+            <div className="h-px flex-1 bg-border-subtle" />
+            <p className="text-xs text-ink-faint">OR</p>
+            <div className="h-px flex-1 bg-border-subtle" />
+          </div>
+        )}
+
         <div className="space-y-3">
           {phones.map((phone, i) => (
             <div key={i} className="flex gap-2">
@@ -123,15 +188,17 @@ export function CustomActionBuilder() {
             </div>
           ))}
         </div>
-        {phones.length < MAX_OPPONENTS && (
+        {opponentCount < MAX_OPPONENTS && (
           <Button type="button" variant="ghost" size="sm" className="mt-3" onClick={addPhone}>
             + Add another
           </Button>
         )}
-        <p className="mt-2 text-xs text-ink-faint">Up to {MAX_OPPONENTS} opponents ({CUSTOM_ACTION_MAX_PARTICIPANTS} total players).</p>
+        <p className="mt-2 text-xs text-ink-faint">
+          {remainingSlots > 0 ? `Up to ${remainingSlots} more` : "Max reached"} ({CUSTOM_ACTION_MAX_PARTICIPANTS} total players).
+        </p>
       </div>
 
-      {hasValidStake && filledPhones.length > 0 && (
+      {hasValidStake && opponentCount > 0 && (
         <Card>
           <CardContent className="pt-5">
             <p className="text-xs text-ink-faint">{participantCount} participants × {formatStake(stakeNumber)}</p>

@@ -1,8 +1,10 @@
+import { Avatar } from "@/components/ui/avatar";
 import { Card, CardContent } from "@/components/ui/card";
 
 export interface AcceptanceChecklistEntry {
   id: string;
   name: string;
+  avatarUrl?: string | null;
   accepted: boolean;
 }
 
@@ -20,7 +22,10 @@ export function AcceptanceChecklist({ entries }: { entries: AcceptanceChecklistE
         <p className="mb-1 text-sm font-medium text-ink">Waiting on everyone to accept</p>
         {entries.map((entry) => (
           <div key={entry.id} className="flex items-center justify-between">
-            <p className="text-sm text-ink-muted">{entry.name}</p>
+            <div className="flex items-center gap-2.5">
+              <Avatar url={entry.avatarUrl ?? null} label={entry.name} size="sm" />
+              <p className="text-sm text-ink-muted">{entry.name}</p>
+            </div>
             <p className={entry.accepted ? "text-sm font-medium text-accent" : "text-xs text-ink-faint"}>
               {entry.accepted ? "✓" : "Waiting"}
             </p>

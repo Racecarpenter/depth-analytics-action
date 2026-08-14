@@ -2,7 +2,12 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { Avatar } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { PersonPicker } from "@/features/users/components/person-picker";
+import { getAvatarUrl } from "@/features/users/lib/identity";
+import type { PersonSummary } from "@/features/users/queries";
 import { formatGameTime } from "@/lib/utils/date";
 import type { SportsEvent } from "@/lib/sports-data";
 import { createActionAndInvite } from "../mutations";
@@ -13,11 +18,13 @@ import { TeamPicker } from "./team-picker";
 export function ActionBuilder({ event }: { event: SportsEvent }) {
   const [selectionKey, setSelectionKey] = useState<string | null>(null);
   const [stake, setStake] = useState("");
+  const [selectedPerson, setSelectedPerson] = useState<PersonSummary | null>(null);
+  const [hasPickerHistory, setHasPickerHistory] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
 
-  function handleInvite(phone: string) {
+  function submit(opponent: { opponentPhone: string } | { opponentUserId: string }) {
     if (!selectionKey) {
       setError("Pick a team first.");
       return;
@@ -28,7 +35,7 @@ export function ActionBuilder({ event }: { event: SportsEvent }) {
         eventId: event.id,
         selectionKey,
         stakeAmount: stake ? Number(stake) : undefined,
-        opponentPhone: phone,
+        ...opponent,
       });
       if (!result.ok) {
         if (result.paywallRequired) {
@@ -67,7 +74,53 @@ export function ActionBuilder({ event }: { event: SportsEvent }) {
 
       <div className="border-t border-border-subtle pt-6">
         <p className="mb-3 text-sm font-medium text-ink">Invite</p>
-        <InviteForm onSubmit={handleInvite} isPending={isPending} error={error} />
+
+        {selectedPerson ? (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between rounded-xl border border-border-strong bg-bg-raised px-4 py-3">
+              <div className="flex items-center gap-3">
+                <Avatar url={getAvatarUrl(selectedPerson.avatarPath)} label={selectedPerson.displayName ?? "?"} size="md" />
+                <div>
+                  <p className="text-sm font-medium text-ink">{selectedPerson.displayName ?? "Unnamed"}</p>
+                  {selectedPerson.username && <p className="text-xs text-ink-faint">@{selectedPerson.username}</p>}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedPerson(null)}
+                className="text-xs text-ink-faint underline underline-offset-2 hover:text-ink-muted"
+              >
+                Change
+              </button>
+            </div>
+
+            {error && <p className="text-sm text-danger">{error}</p>}
+
+            <Button
+              className="w-full tap-target"
+              size="lg"
+              isLoading={isPending}
+              disabled={isPending}
+              onClick={() => submit({ opponentUserId: selectedPerson.userId })}
+            >
+              Send invitation
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-5">
+            <PersonPicker onSelect={setSelectedPerson} onHasHistoryChange={setHasPickerHistory} />
+
+            {hasPickerHistory && (
+              <div className="flex items-center gap-3">
+                <div className="h-px flex-1 bg-border-subtle" />
+                <p className="text-xs text-ink-faint">OR</p>
+                <div className="h-px flex-1 bg-border-subtle" />
+              </div>
+            )}
+
+            <InviteForm onSubmit={(phone) => submit({ opponentPhone: phone })} isPending={isPending} error={error} />
+          </div>
+        )}
       </div>
     </div>
   );

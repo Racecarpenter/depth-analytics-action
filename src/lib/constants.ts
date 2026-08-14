@@ -62,6 +62,46 @@ export const CUSTOM_ACTION_TITLE_MAX_LENGTH = 140;
 export const CUSTOM_ACTION_PROOF_MAX_BYTES = 5 * 1024 * 1024; // matches the Storage bucket's file_size_limit
 export const CUSTOM_ACTION_PROOF_ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
 
+// --- User profiles ---
+// See README ("User profiles") for the full picture. Username length bounds
+// mirror the DB check constraint exactly (supabase/migrations/0019_user_profiles.sql,
+// `username_format`: `^[a-z][a-z0-9_]{2,19}$`) — keep these in sync if that
+// constraint ever changes.
+export const USERNAME_MIN_LENGTH = 3;
+export const USERNAME_MAX_LENGTH = 20;
+export const DISPLAY_NAME_MAX_LENGTH = 40; // mirrors the `display_name_length` check constraint
+
+// Kept short and boring on purpose — this is a spam/impersonation guard, not
+// a trademark system. Add to this list rather than building anything fancier.
+export const RESERVED_USERNAMES = [
+  "admin",
+  "administrator",
+  "action",
+  "actionapp",
+  "depthanalytics",
+  "support",
+  "help",
+  "official",
+  "staff",
+  "moderator",
+  "mod",
+  "system",
+  "root",
+  "api",
+  "www",
+  "settings",
+  "security",
+  "billing",
+  "null",
+  "undefined",
+  "me",
+  "you",
+  "everyone",
+];
+
+export const AVATAR_MAX_BYTES = 3 * 1024 * 1024; // matches the avatars Storage bucket's file_size_limit (supabase/migrations/0020_avatar_storage.sql)
+export const AVATAR_ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+
 // --- SMS consent / Twilio A2P 10DLC ---
 // See README ("SMS consent & Twilio A2P 10DLC") for the full compliance
 // picture. SMS_DISCLOSURE_VERSION is recorded on every sms_consent_events
@@ -86,3 +126,17 @@ export const SMS_OPT_OUT_SUFFIX = " Reply STOP to opt out.";
 // production / before submitting for Twilio review. Used on /privacy,
 // /terms, and anywhere else a contact method is shown.
 export const SUPPORT_EMAIL = "depthanalyticsllc@gmail.com";
+
+// --- Social preview (Open Graph / Twitter card) ---
+// One asset, reused by every route's metadata (root layout, /how-it-works)
+// so there's a single source of truth for what a shared link looks like —
+// see README ("Social preview image") for why this matters and what to do
+// if the asset is ever replaced. WIDTH/HEIGHT must always equal the file's
+// actual pixel dimensions (public/action-og.png) — crawlers that trust
+// declared dimensions over independently fetching the image (several major
+// ones do, including Apple's Link Presentation framework used by iMessage)
+// will render a broken or undersized card if these drift from reality.
+export const SOCIAL_IMAGE_URL = "/action-og.png";
+export const SOCIAL_IMAGE_WIDTH = 1200;
+export const SOCIAL_IMAGE_HEIGHT = 650;
+export const SOCIAL_IMAGE_ALT = "Action — Real people. Real challenges. Action.";

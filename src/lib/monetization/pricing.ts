@@ -34,4 +34,13 @@ export const PRICING = {
     description: "Unlimited Action for 30 days.",
     disclaimer: "No subscription. No auto-renewal.",
   },
+
+  /**
+   * Beta-only, free, repeatable — NOT a purchase. See
+   * src/features/monetization/lib/beta-credits.ts and README ("Beta testing
+   * access"). Only ever granted to authorized beta testers, only while
+   * ENABLE_BETA_FREE_CREDITS=true, and only when their balance has actually
+   * reached the paywall — never shown or usable by production users.
+   */
+  betaGrantActions: 5,
 } as const;

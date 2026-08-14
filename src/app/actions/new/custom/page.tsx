@@ -7,6 +7,7 @@ import { ActionTypeTabs } from "@/features/actions/components/action-type-tabs";
 import { CustomActionBuilder } from "@/features/custom-actions/components/custom-action-builder";
 import { getEntitlementSummary } from "@/features/monetization/queries";
 import { Paywall } from "@/features/monetization/components/paywall";
+import { isBetaFreeCreditsFeatureEnabled } from "@/features/monetization/lib/beta-credits";
 
 export default async function NewCustomActionPage({
   searchParams,
@@ -37,7 +38,13 @@ export default async function NewCustomActionPage({
         <AppHeader />
         <PageContainer>
           <BackLink href="/actions/new" label="Search" />
-          <Paywall returnTo="/actions/new/custom" justPurchased={checkout === "success"} />
+          <Paywall
+            returnTo="/actions/new/custom"
+            justPurchased={checkout === "success"}
+            actionPackPurchasable={Boolean(process.env.STRIPE_PRICE_ACTION_PACK)}
+            actionPassPurchasable={Boolean(process.env.STRIPE_PRICE_ACTION_PASS)}
+            betaCreditsAvailable={entitlement.isBetaTester && isBetaFreeCreditsFeatureEnabled()}
+          />
         </PageContainer>
       </>
     );

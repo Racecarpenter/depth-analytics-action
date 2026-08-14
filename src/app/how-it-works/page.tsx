@@ -3,21 +3,29 @@ import { AppHeader } from "@/components/layout/app-header";
 import { PageContainer } from "@/components/layout/page-container";
 import { Button } from "@/components/ui/button";
 import { HowItWorksGraphic } from "@/components/how-it-works/how-it-works-graphic";
-import { APP_NAME } from "@/lib/constants";
+import {
+  APP_NAME,
+  SOCIAL_IMAGE_ALT,
+  SOCIAL_IMAGE_HEIGHT,
+  SOCIAL_IMAGE_URL,
+  SOCIAL_IMAGE_WIDTH,
+} from "@/lib/constants";
+
+const DESCRIPTION = "Create an Action, invite your friends, pick a winner, and settle it when the challenge is over.";
 
 export const metadata = {
   title: `How Action Works | ${APP_NAME}`,
-  description: "Create an Action, invite your friends, pick a winner, and settle it when the challenge is over.",
+  description: DESCRIPTION,
   openGraph: {
     title: `How Action Works | ${APP_NAME}`,
-    description: "Create an Action, invite your friends, pick a winner, and settle it when the challenge is over.",
-    images: [{ url: "/action-og.png", width: 633, height: 343, alt: "Action — Real people. Real challenges. Action." }],
+    description: DESCRIPTION,
+    images: [{ url: SOCIAL_IMAGE_URL, width: SOCIAL_IMAGE_WIDTH, height: SOCIAL_IMAGE_HEIGHT, alt: SOCIAL_IMAGE_ALT }],
   },
   twitter: {
     card: "summary_large_image",
     title: `How Action Works | ${APP_NAME}`,
-    description: "Create an Action, invite your friends, pick a winner, and settle it when the challenge is over.",
-    images: ["/action-link-preview.png"],
+    description: DESCRIPTION,
+    images: [{ url: SOCIAL_IMAGE_URL, alt: SOCIAL_IMAGE_ALT }],
   },
 };
 

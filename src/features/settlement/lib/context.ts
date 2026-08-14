@@ -11,7 +11,7 @@ const SETTLEMENT_SELECT = `
   game:games(*, home_team:teams!games_home_team_id_fkey(*), away_team:teams!games_away_team_id_fkey(*)),
   participants!participants_action_id_fkey(
   *,
-  user:users(id, display_name, cashtag)
+  user:users(id, display_name, username, avatar_path, cashtag)
 )
 `;
 
@@ -49,7 +49,7 @@ export async function getObligationContext(
     .select(`id, action_id, amount, debtor_participant_id, creditor_participant_id, action:actions(
   participants!participants_action_id_fkey(
     *,
-    user:users(id, display_name, cashtag)
+    user:users(id, display_name, username, avatar_path, cashtag)
   )
 )`)
     .eq("id", obligationId)

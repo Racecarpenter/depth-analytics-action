@@ -5,13 +5,20 @@ import type { ActionWithDetails } from "@/features/actions/types";
 import type { Database } from "@/types/database.types";
 import type { NotificationType, ParticipantRole } from "@/types/domain";
 
+/**
+ * `actionId` is optional — every notification type except `profile_completion`
+ * is Action-scoped and always passes one; `profile_completion` is the one
+ * deliberate exception (see notificationHref in NotificationBell, which
+ * special-cases that type to route to /profile instead of deriving a route
+ * from action_id).
+ */
 export async function createNotification(
   admin: SupabaseClient<Database>,
-  input: { userId: string; actionId: string; type: NotificationType; title: string; body: string },
+  input: { userId: string; actionId?: string; type: NotificationType; title: string; body: string },
 ) {
   await admin.from("notifications").insert({
     user_id: input.userId,
-    action_id: input.actionId,
+    action_id: input.actionId ?? null,
     type: input.type,
     title: input.title,
     body: input.body,

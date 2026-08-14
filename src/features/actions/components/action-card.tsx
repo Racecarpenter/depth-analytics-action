@@ -1,18 +1,25 @@
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
+import { Avatar } from "@/components/ui/avatar";
+import { resolveIdentity } from "@/features/users/lib/identity";
 import { formatStake } from "@/lib/utils/currency";
 import { formatGameTime } from "@/lib/utils/date";
-import { maskPhone } from "@/lib/utils/phone";
-import { findParticipant, opponentOf, personalStatus, type ActionWithDetails } from "../types";
+import { canRespondToInvite, findParticipant, opponentOf, personalStatus, type ActionWithDetails } from "../types";
 import { StatusPill } from "./status-pill";
 
 export function ActionCard({ action, currentUserId }: { action: ActionWithDetails; currentUserId: string }) {
   const viewer = findParticipant(action, currentUserId);
   const status = personalStatus(action.status, viewer?.role ?? null);
+  const needsResponse = canRespondToInvite(action, currentUserId);
 
   return (
     <Link href={`/actions/${action.id}`} className="block">
       <Card className="p-5 transition-colors hover:border-border-strong">
+        {needsResponse && (
+          <p className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-warn/20 bg-warn/10 px-2.5 py-1 text-xs font-medium text-warn">
+            Needs your response
+          </p>
+        )}
         {action.action_type === "sports" && action.game ? (
           <SportsCardBody action={action} status={status} currentUserId={currentUserId} />
         ) : (
@@ -35,17 +42,21 @@ function SportsCardBody({
   if (!action.game || !action.market) return null;
   const viewer = findParticipant(action, currentUserId);
   const opponent = opponentOf(action, currentUserId);
-  const opponentLabel =
-    opponent?.status === "invited" ? "Invite sent" : opponent ? maskPhone(opponent.phone) : "—";
+  const opponentIdentity = opponent ? resolveIdentity(opponent.user, opponent.phone) : null;
   const matchup = `${action.game.away_team.abbreviation} @ ${action.game.home_team.abbreviation}`;
 
   return (
     <>
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-ink-faint">{opponentLabel}</p>
-          <p className="mt-1 text-base font-semibold text-ink">{matchup}</p>
-          <p className="mt-0.5 text-xs text-ink-faint">{formatGameTime(action.game.start_time)}</p>
+        <div className="flex items-center gap-2">
+          {opponentIdentity && <Avatar url={opponentIdentity.avatarUrl} label={opponentIdentity.name} size="sm" />}
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-ink-faint">
+              {opponent?.status === "invited" ? "Invite sent" : (opponentIdentity?.name ?? "—")}
+            </p>
+            <p className="mt-1 text-base font-semibold text-ink">{matchup}</p>
+            <p className="mt-0.5 text-xs text-ink-faint">{formatGameTime(action.game.start_time)}</p>
+          </div>
         </div>
         <StatusPill status={status} />
       </div>

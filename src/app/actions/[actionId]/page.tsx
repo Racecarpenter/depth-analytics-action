@@ -3,12 +3,22 @@ import { AppHeader } from "@/components/layout/app-header";
 import { BackLink } from "@/components/layout/back-link";
 import { PageContainer } from "@/components/layout/page-container";
 import { Card, CardContent } from "@/components/ui/card";
+import { ParticipantIdentity } from "@/features/users/components/participant-identity";
+import { resolveIdentity } from "@/features/users/lib/identity";
 import { requireUser } from "@/features/auth/session";
+import { ActionInviteResponse } from "@/features/actions/components/action-invite-response";
 import { CancelActionButton } from "@/features/actions/components/cancel-action-button";
 import { StatusPill } from "@/features/actions/components/status-pill";
 import { ActionStatusHistoryList } from "@/features/actions/components/action-status-history";
 import { getActionById, getActionStatusHistory } from "@/features/actions/queries";
-import { findParticipant, getResolution, opponentOf, personalStatus, type ActionWithDetails } from "@/features/actions/types";
+import {
+  canRespondToInvite,
+  findParticipant,
+  getResolution,
+  opponentOf,
+  personalStatus,
+  type ActionWithDetails,
+} from "@/features/actions/types";
 import { AcceptanceChecklist } from "@/features/custom-actions/components/acceptance-checklist";
 import { ResolutionReveal } from "@/features/custom-actions/components/resolution-reveal";
 import { VotingPanel } from "@/features/custom-actions/components/voting-panel";
@@ -21,7 +31,6 @@ import { MANUAL_NUDGE_COOLDOWN_HOURS } from "@/lib/settlement/reminder-schedule"
 import { STAKE_DISCLAIMER } from "@/lib/constants";
 import { formatStake } from "@/lib/utils/currency";
 import { formatGameTime } from "@/lib/utils/date";
-import { maskPhone } from "@/lib/utils/phone";
 
 export default async function ActionDetailPage({
   params,
@@ -39,11 +48,18 @@ export default async function ActionDetailPage({
   const status = personalStatus(action.status, viewer?.role ?? null);
   const isLocked = action.status !== "pending" && action.status !== "declined" && action.status !== "cancelled";
 
-  const nameFor = (participantId: string) => {
+  // Single resolution point for "who is this participant" on this page —
+  // identityFor gives the full { name, avatarUrl } shape for components that
+  // render an avatar (AcceptanceChecklist); nameFor is a thin wrapper for
+  // the plain-text-only leaf components (VotingPanel, ResolutionReveal,
+  // ObligationList) that weren't reshaped to take avatars — see README
+  // ("User profiles") for why those stayed text-only.
+  const identityFor = (participantId: string) => {
     const p = action.participants.find((x) => x.id === participantId);
-    if (!p) return "someone";
-    return p.user?.display_name?.trim() || maskPhone(p.phone);
+    if (!p) return { name: "someone", handle: null, avatarUrl: null, hasProfile: false };
+    return resolveIdentity(p.user, p.phone);
   };
+  const nameFor = (participantId: string) => identityFor(participantId).name;
 
   return (
     <>
@@ -69,14 +85,21 @@ export default async function ActionDetailPage({
           <CustomInfoCard action={action} />
         )}
 
+        {/* Accept/Decline — in-app, no invite link required (see respondToActionInvite) */}
+        {canRespondToInvite(action, user.id) && <ActionInviteResponse actionId={action.id} />}
+
         {/* Custom Action: acceptance checklist while pending */}
         {action.action_type === "custom" && action.status === "pending" && (
           <AcceptanceChecklist
-            entries={action.participants.map((p) => ({
-              id: p.id,
-              name: nameFor(p.id),
-              accepted: p.status === "accepted",
-            }))}
+            entries={action.participants.map((p) => {
+              const identity = identityFor(p.id);
+              return {
+                id: p.id,
+                name: identity.name,
+                avatarUrl: identity.avatarUrl,
+                accepted: p.status === "accepted",
+              };
+            })}
           />
         )}
 
@@ -155,6 +178,12 @@ function SportsInfoCard({
   const viewer = findParticipant(action, viewerId);
   const opponent = opponentOf(action, viewerId);
   const isFinal = ["won", "lost", "push"].includes(action.status);
+  // Only link through to the lightweight profile once there's genuine
+  // shared history (opponent has accepted) — matches the same "genuinely
+  // participated" rule the people-history RPCs use, and is what keeps
+  // /players/[userId] from being reachable off a still-pending invite.
+  const opponentProfileHref =
+    opponent?.status === "accepted" && opponent.user_id ? `/players/${opponent.user_id}` : undefined;
 
   return (
     <>
@@ -191,12 +220,16 @@ function SportsInfoCard({
             </div>
             <div>
               <p className="text-xs text-ink-faint">Opponent</p>
-              <p className="mt-0.5 text-sm font-medium text-ink">
-                {opponent ? maskPhone(opponent.phone) : "—"}
-                {opponent?.status === "invited" && (
-                  <span className="ml-2 text-xs font-normal text-ink-faint">Awaiting response</span>
-                )}
-              </p>
+              {opponent ? (
+                <div className="mt-1">
+                  <ParticipantIdentity source={opponent.user} phone={opponent.phone} href={opponentProfileHref} size="sm" />
+                  {opponent.status === "invited" && (
+                    <span className="mt-1 block text-xs font-normal text-ink-faint">Awaiting response</span>
+                  )}
+                </div>
+              ) : (
+                <p className="mt-0.5 text-sm font-medium text-ink">—</p>
+              )}
             </div>
           </div>
         </CardContent>

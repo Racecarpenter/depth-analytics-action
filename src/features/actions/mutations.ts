@@ -18,6 +18,8 @@ import { recordStatusChange } from "./lib/status-history";
 import { inviteParticipant } from "./lib/invite-participant";
 import { inviteUrl, verifyInviteToken } from "./lib/signed-token";
 import { syncGameFromEvent } from "./lib/sync-game";
+import type { ActionRow, ParticipantRow } from "./types";
+import type { Tables } from "@/types/domain";
 
 export interface ActionMutationResult {
   ok: boolean;
@@ -52,7 +54,9 @@ export async function createActionAndInvite(input: {
   eventId: string;
   selectionKey: string;
   stakeAmount?: number;
-  opponentPhone: string;
+  /** Provide exactly one — see PersonPicker ("people you've had Action with") vs. typing a number directly. */
+  opponentPhone?: string;
+  opponentUserId?: string;
 }): Promise<ActionMutationResult> {
   const currentUser = await getCurrentUser();
   if (!currentUser) return { ok: false, error: "You need to be signed in." };
@@ -66,10 +70,17 @@ export async function createActionAndInvite(input: {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid Action details." };
   }
 
-  const opponentPhone = normalizePhone(input.opponentPhone);
-  if (!opponentPhone) return { ok: false, error: "Enter a valid phone number." };
-  if (opponentPhone === currentUser.phone) {
-    return { ok: false, error: "You can't challenge yourself." };
+  let opponentPhone: string | null = null;
+  if (input.opponentUserId) {
+    if (input.opponentUserId === currentUser.id) return { ok: false, error: "You can't challenge yourself." };
+  } else if (input.opponentPhone) {
+    opponentPhone = normalizePhone(input.opponentPhone);
+    if (!opponentPhone) return { ok: false, error: "Enter a valid phone number." };
+    if (opponentPhone === currentUser.phone) {
+      return { ok: false, error: "You can't challenge yourself." };
+    }
+  } else {
+    return { ok: false, error: "Pick someone or enter a phone number." };
   }
 
   const provider = getSportsDataProvider();
@@ -144,22 +155,31 @@ export async function createActionAndInvite(input: {
 
     const invited = await inviteParticipant(admin, currentUser.id, {
       actionId: action.id,
-      phone: opponentPhone,
+      phone: opponentPhone ?? undefined,
+      userId: input.opponentUserId,
       selection: opponentTeam.abbreviation,
       sideLabel: opponentTeam.name,
       inviteExpiryHours: INVITE_EXPIRY_HOURS,
     });
 
     if (!invited) {
-      throw new ActionCreationFailedError("Couldn't invite that number. Try again.");
+      throw new ActionCreationFailedError("Couldn't invite that person. Try again.");
     }
 
     await recordStatusChange(admin, action.id, null, "pending", "creator");
 
     const matchup = `${event.awayTeam.name} @ ${event.homeTeam.name}`;
-    const inviteLink = inviteUrl(invited.inviteToken);
-    const smsBody = `${APP_NAME}: ${currentUser.display_name ?? "A friend"} challenged you: ${matchup} — you'd take ${opponentTeam.name}. Review it: ${inviteLink}${SMS_OPT_OUT_SUFFIX}`;
-    await getSmsProvider().send({ to: opponentPhone, body: smsBody });
+
+    // Selected via the person picker: identity is already established, so
+    // no SMS invite link is needed — they see it in-app via the normal
+    // "Needs your response" flow (respondToActionInvite). Typed-phone path
+    // keeps sending the SMS link exactly as before, since that's the only
+    // way a not-yet-a-user (or not-signed-in) recipient can find the Action.
+    if (!input.opponentUserId && opponentPhone) {
+      const inviteLink = inviteUrl(invited.inviteToken);
+      const smsBody = `${APP_NAME}: ${currentUser.display_name ?? "A friend"} challenged you: ${matchup} — you'd take ${opponentTeam.name}. Review it: ${inviteLink}${SMS_OPT_OUT_SUFFIX}`;
+      await getSmsProvider().send({ to: opponentPhone, body: smsBody });
+    }
 
     if (invited.existingUserId) {
       await createNotification(admin, {
@@ -240,13 +260,88 @@ export async function respondToInvite(
   if (!action) return { ok: false, error: "This Action no longer exists." };
   if (action.status !== "pending") return { ok: false, error: "This Action is no longer available." };
 
+  return finalizeInviteResponse(admin, action, participant, currentUser, decision);
+}
+
+/**
+ * In-app counterpart to respondToInvite: lets an already-signed-in
+ * participant accept/decline directly from the Action detail page, with no
+ * invite link/token involved at all. SMS delivery (and, right now, actual
+ * A2P campaign approval) must never be a precondition for using Action — see
+ * README ("SMS consent & Twilio A2P 10DLC") and the "SMS is optional"
+ * principle this mutation exists to satisfy.
+ *
+ * Authorization is "are you the invited participant on this Action,"
+ * checked first by user_id (the normal case — see the invite-claim backfill
+ * in verifyOtp, features/auth/mutations.ts) and falling back to phone as a
+ * defense-in-depth safety net. This is the same authorization guarantee the
+ * signed token encodes for the SMS-delivered path, just derived from the
+ * signed-in session instead of a URL parameter.
+ */
+export async function respondToActionInvite(
+  actionId: string,
+  decision: "accept" | "decline",
+): Promise<ActionMutationResult> {
+  const currentUser = await getCurrentUser();
+  if (!currentUser) return { ok: false, error: "You need to be signed in." };
+
+  const admin = createAdminClient();
+
+  const { data: action, error: actionError } = await admin.from("actions").select("*").eq("id", actionId).maybeSingle();
+  if (actionError) logError("[respondToActionInvite] action lookup failed:", actionError);
+  if (!action) return { ok: false, error: "This Action no longer exists." };
+  if (action.status !== "pending") return { ok: false, error: "This Action is no longer available." };
+
+  const { data: byUserId, error: byUserIdError } = await admin
+    .from("participants")
+    .select("*")
+    .eq("action_id", actionId)
+    .eq("user_id", currentUser.id)
+    .maybeSingle();
+  if (byUserIdError) logError("[respondToActionInvite] participant lookup by user_id failed:", byUserIdError);
+
+  let participant = byUserId;
+  if (!participant) {
+    const { data: byPhone, error: byPhoneError } = await admin
+      .from("participants")
+      .select("*")
+      .eq("action_id", actionId)
+      .eq("phone", currentUser.phone)
+      .maybeSingle();
+    if (byPhoneError) logError("[respondToActionInvite] participant lookup by phone failed:", byPhoneError);
+    participant = byPhone;
+  }
+
+  if (!participant) return { ok: false, error: "You're not part of this Action." };
+  if (participant.status !== "invited") return { ok: false, error: "You've already responded to this Action." };
+  if (participant.invite_expires_at && new Date(participant.invite_expires_at) < new Date()) {
+    return { ok: false, error: "This invite has expired." };
+  }
+
+  return finalizeInviteResponse(admin, action, participant, currentUser, decision);
+}
+
+/**
+ * Shared accept/decline core for both respondToInvite (token-authorized,
+ * SMS-delivered) and respondToActionInvite (session-authorized, in-app) —
+ * everything past "which participant row, on which Action, is this" is
+ * identical between the two entry points, so it lives in exactly one place
+ * rather than being duplicated per authorization method.
+ */
+async function finalizeInviteResponse(
+  admin: ReturnType<typeof createAdminClient>,
+  action: ActionRow,
+  participant: ParticipantRow,
+  currentUser: Tables<"users">,
+  decision: "accept" | "decline",
+): Promise<ActionMutationResult> {
   const { data: creatorParticipant, error: creatorError } = await admin
     .from("participants")
     .select("*")
     .eq("action_id", action.id)
     .eq("role", "creator")
     .maybeSingle();
-  if (creatorError) logError("[respondToInvite] creator participant lookup failed:", creatorError);
+  if (creatorError) logError("[finalizeInviteResponse] creator participant lookup failed:", creatorError);
 
   if (decision === "decline") {
     await admin

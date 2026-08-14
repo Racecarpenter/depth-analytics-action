@@ -7,7 +7,15 @@ import { createInviteToken } from "./signed-token";
 
 export interface InviteParticipantInput {
   actionId: string;
-  phone: string;
+  /**
+   * Provide exactly one. `userId` is the "picked from people you've had
+   * Action with" path (see features/users/search.ts) — identity is already
+   * known, so this skips the phone->user lookup and the referral upsert
+   * (an existing user can't be a "new" referral). `phone` is the original
+   * type-a-number path.
+   */
+  phone?: string;
+  userId?: string;
   /** Sports-only — a Custom Action participant has neither. */
   selection?: string | null;
   sideLabel?: string | null;
@@ -39,35 +47,58 @@ export async function inviteParticipant(
   currentUserId: string,
   input: InviteParticipantInput,
 ): Promise<InviteParticipantResult | null> {
-  const { data: existingUser, error: existingUserError } = await admin
-    .from("users")
-    .select("id")
-    .eq("phone", input.phone)
-    .maybeSingle();
-  if (existingUserError) {
-    // Falls through and treats this phone as "not yet a user," same as a
-    // genuine not-found — the alternative (blocking the whole invite) is
-    // worse than the small risk of a referral misattribution on a
-    // transient read failure. Logged so a persistent failure is visible.
-    logError("[inviteParticipant] existing-user lookup failed:", existingUserError);
-  }
+  let phone: string;
+  let existingUserId: string | null;
 
-  if (!existingUser?.id) {
-    const { error: referralError } = await admin
-      .from("referrals")
-      .upsert(
-        { inviter_user_id: currentUserId, invitee_phone: input.phone },
-        { onConflict: "invitee_phone", ignoreDuplicates: true },
-      );
-    if (referralError) logError("[inviteParticipant] referral upsert failed:", referralError);
+  if (input.userId) {
+    // participants.phone is NOT NULL, so a phone is still needed even
+    // though identity here is already resolved by user id — it's kept as
+    // an SMS/fallback-display detail, never used to (re-)establish who
+    // this is. No referral upsert: this person already has an account.
+    const { data: user, error } = await admin.from("users").select("phone").eq("id", input.userId).maybeSingle();
+    if (error || !user) {
+      logError("[inviteParticipant] userId lookup failed:", error);
+      return null;
+    }
+    phone = user.phone;
+    existingUserId = input.userId;
+  } else if (input.phone) {
+    const { data: existingUser, error: existingUserError } = await admin
+      .from("users")
+      .select("id")
+      .eq("phone", input.phone)
+      .maybeSingle();
+    if (existingUserError) {
+      // Falls through and treats this phone as "not yet a user," same as a
+      // genuine not-found — the alternative (blocking the whole invite) is
+      // worse than the small risk of a referral misattribution on a
+      // transient read failure. Logged so a persistent failure is visible.
+      logError("[inviteParticipant] existing-user lookup failed:", existingUserError);
+    }
+
+    if (!existingUser?.id) {
+      const { error: referralError } = await admin
+        .from("referrals")
+        .upsert(
+          { inviter_user_id: currentUserId, invitee_phone: input.phone },
+          { onConflict: "invitee_phone", ignoreDuplicates: true },
+        );
+      if (referralError) logError("[inviteParticipant] referral upsert failed:", referralError);
+    }
+
+    phone = input.phone;
+    existingUserId = existingUser?.id ?? null;
+  } else {
+    logError("[inviteParticipant] neither phone nor userId provided", { actionId: input.actionId });
+    return null;
   }
 
   const { data: participant, error: participantError } = await admin
     .from("participants")
     .insert({
       action_id: input.actionId,
-      user_id: existingUser?.id ?? null,
-      phone: input.phone,
+      user_id: existingUserId,
+      phone,
       role: "opponent",
       status: "invited",
       selection: input.selection ?? null,
@@ -85,5 +116,5 @@ export async function inviteParticipant(
   const token = createInviteToken(input.actionId, participant.id);
   await admin.from("participants").update({ invite_token: token }).eq("id", participant.id);
 
-  return { participantId: participant.id, inviteToken: token, existingUserId: existingUser?.id ?? null };
+  return { participantId: participant.id, inviteToken: token, existingUserId };
 }

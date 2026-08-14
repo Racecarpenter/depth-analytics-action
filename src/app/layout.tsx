@@ -1,6 +1,12 @@
 import type { Metadata, Viewport } from "next";
 import { QueryProvider } from "@/providers/query-provider";
-import { APP_NAME } from "@/lib/constants";
+import {
+  APP_NAME,
+  SOCIAL_IMAGE_ALT,
+  SOCIAL_IMAGE_HEIGHT,
+  SOCIAL_IMAGE_URL,
+  SOCIAL_IMAGE_WIDTH,
+} from "@/lib/constants";
 import { isSiteGatePassed } from "@/lib/utils/site-gate-server";
 import { SiteGateScreen } from "@/features/site-gate/components/site-gate-screen";
 import "./globals.css";
@@ -26,10 +32,10 @@ export const metadata: Metadata = {
     description: DESCRIPTION,
     images: [
       {
-        url: "/action-og.png",
-        width: 633,
-        height: 343,
-        alt: "Action — Real people. Real challenges. Action.",
+        url: SOCIAL_IMAGE_URL,
+        width: SOCIAL_IMAGE_WIDTH,
+        height: SOCIAL_IMAGE_HEIGHT,
+        alt: SOCIAL_IMAGE_ALT,
       },
     ],
   },
@@ -37,7 +43,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: TITLE,
     description: DESCRIPTION,
-    images: ["/action-link-preview.png"],
+    images: [{ url: SOCIAL_IMAGE_URL, alt: SOCIAL_IMAGE_ALT }],
   },
   icons: {
     icon: "/action-icon.png",

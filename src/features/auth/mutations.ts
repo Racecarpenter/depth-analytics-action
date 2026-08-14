@@ -10,6 +10,7 @@ import { logError } from "@/lib/utils/log-error";
 import { otpVerifySchema, phoneRequestSchema } from "@/lib/validations/auth";
 import { PRICING } from "@/lib/monetization/pricing";
 import { logAnalyticsEvent } from "@/lib/monetization/analytics";
+import { createNotification } from "@/features/notifications/lib/notify";
 
 export interface AuthActionResult {
   ok: boolean;
@@ -174,7 +175,40 @@ export async function verifyOtp(rawPhone: string, rawCode: string): Promise<Auth
       logError("[verifyOtp] users upsert failed:", upsertError);
       return { ok: false, error: "Couldn't finish creating your account. Try again." };
     }
+
+    // Only ever created here — this branch runs exactly once per account
+    // (a brand-new auth.users row), so there's no separate dedup flag/column
+    // needed (see README, "User profiles"). It's marked read automatically
+    // when updateProfile() succeeds (features/users/mutations.ts). In-app
+    // only, no SMS — this is purely a "notice something in the app" nudge.
+    // Matches createNotification's existing best-effort contract elsewhere
+    // in the app (see notifyParticipants) — never blocks sign-in.
+    await createNotification(admin, {
+      userId,
+      type: "profile_completion",
+      title: "Make Action yours",
+      body: "Add a name and photo so your friends know it's you.",
+    });
   }
+
+  // Claim any Action invitations sent to this phone before this person had
+  // an account. inviteParticipant (features/actions/lib/invite-participant.ts)
+  // already links a participant row to a user_id at invite time when the
+  // phone matches an *existing* account, but a brand-new phone number gets
+  // user_id: null there since there's nothing to link to yet. Without this,
+  // that invite would stay invisible on Home/the Action page — both are RLS-
+  // scoped to participants.user_id = auth.uid() (see my_action_ids() in
+  // supabase/migrations/0003_fix_rls_recursion.sql) — until this person
+  // happened to open the specific SMS invite link, which is exactly the SMS
+  // dependency the app must not have. Runs on every sign-in, new or
+  // returning; idempotent — only ever touches rows that still have no
+  // user_id, never overwrites an existing link.
+  const { error: claimError } = await admin
+    .from("participants")
+    .update({ user_id: userId })
+    .eq("phone", phone)
+    .is("user_id", null);
+  if (claimError) logError("[verifyOtp] participant invite claim failed:", claimError);
 
   // Starter grant — attempted on every sign-in, new or returning, not just
   // inside the "created a brand-new auth user" branch above. That used to be

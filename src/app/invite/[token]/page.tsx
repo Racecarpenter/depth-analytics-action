@@ -7,6 +7,8 @@ import { getCurrentUser } from "@/features/auth/session";
 import { InviteResponse } from "@/features/actions/components/invite-response";
 import { verifyInviteToken } from "@/features/actions/lib/signed-token";
 import { getInvitePreview } from "@/features/actions/queries";
+import { ParticipantIdentity } from "@/features/users/components/participant-identity";
+import { resolveIdentity } from "@/features/users/lib/identity";
 import { APP_NAME, STAKE_DISCLAIMER } from "@/lib/constants";
 import { formatStake } from "@/lib/utils/currency";
 import { formatGameTime } from "@/lib/utils/date";
@@ -71,7 +73,10 @@ export default async function InvitePage({
 
   const isSports = action.action_type === "sports" && action.game && action.market;
   const creatorParticipant = action.participants.find((p) => p.role === "creator");
-  const creatorName = creatorParticipant?.user?.display_name?.trim() || "Your friend";
+  const creatorIdentity = creatorParticipant
+    ? resolveIdentity(creatorParticipant.user, creatorParticipant.phone)
+    : null;
+  const creatorName = creatorIdentity?.hasProfile ? creatorIdentity.name : "Your friend";
 
   return (
     <>
@@ -80,7 +85,12 @@ export default async function InvitePage({
         <p className="text-xs uppercase tracking-wide text-ink-faint">
           {isSports ? "Youve been challenged" : "Youve been invited"}
         </p>
-        <h1 className="mt-1 text-xl font-semibold text-ink">{headline}</h1>
+        {creatorParticipant && creatorIdentity?.hasProfile && (
+          <div className="mt-3">
+            <ParticipantIdentity source={creatorParticipant.user} phone={creatorParticipant.phone} size="sm" />
+          </div>
+        )}
+        <h1 className="mt-3 text-xl font-semibold text-ink">{headline}</h1>
         {isSports && action.game && <p className="mt-0.5 text-sm text-ink-faint">{formatGameTime(action.game.start_time)}</p>}
 
         <Card className="my-5">

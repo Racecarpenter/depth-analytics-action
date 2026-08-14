@@ -1,9 +1,10 @@
 "use client";
 
 import { useRef, useState, useTransition } from "react";
+import Link from "next/link";
 import { useOnClickOutside } from "@/lib/utils/use-on-click-outside";
 import { formatRelativeTime } from "@/lib/utils/date";
-import { markAllNotificationsRead } from "../mutations";
+import { markAllNotificationsRead, markNotificationRead } from "../mutations";
 import type { Tables } from "@/types/domain";
 
 export function NotificationBell({ notifications }: { notifications: Tables<"notifications">[] }) {
@@ -42,17 +43,71 @@ export function NotificationBell({ notifications }: { notifications: Tables<"not
           {notifications.length === 0 ? (
             <p className="px-3 py-6 text-center text-sm text-ink-faint">No notifications yet.</p>
           ) : (
-            notifications.map((n) => (
-              <div key={n.id} className="rounded-xl px-3 py-2.5 hover:bg-bg-raised">
-                <p className="text-sm font-medium text-ink">{n.title}</p>
-                <p className="mt-0.5 text-xs text-ink-muted">{n.body}</p>
-                <p className="mt-1 text-[11px] text-ink-faint">{formatRelativeTime(n.created_at)}</p>
-              </div>
-            ))
+            notifications.map((n) => <NotificationRow key={n.id} notification={n} onNavigate={() => setOpen(false)} />)
           )}
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Every Action-scoped notification type is created via createNotification()
+ * (features/notifications/lib/notify.ts) with an actionId — so any
+ * notification with a non-null action_id always means "go look at that
+ * Action," regardless of its specific type. Deriving the destination
+ * generically off action_id (rather than a per-type switch statement) means
+ * every current and future Action-related notification type routes
+ * correctly without this file needing to know about it.
+ *
+ * `profile_completion` is the one deliberate exception — it has no
+ * action_id (it's not about any specific Action), so it's special-cased by
+ * type instead.
+ */
+function notificationHref(notification: Tables<"notifications">): string | null {
+  if (notification.type === "profile_completion") return "/profile";
+  return notification.action_id ? `/actions/${notification.action_id}` : null;
+}
+
+function NotificationRow({
+  notification,
+  onNavigate,
+}: {
+  notification: Tables<"notifications">;
+  onNavigate: () => void;
+}) {
+  const href = notificationHref(notification);
+  const isUnread = !notification.read_at;
+
+  const body = (
+    <>
+      <p className="text-sm font-medium text-ink">{notification.title}</p>
+      <p className="mt-0.5 text-xs text-ink-muted">{notification.body}</p>
+      <p className="mt-1 text-[11px] text-ink-faint">{formatRelativeTime(notification.created_at)}</p>
+    </>
+  );
+
+  if (!href) {
+    // Purely informational, no Action to navigate to — not interactive.
+    return <div className="rounded-xl px-3 py-2.5">{body}</div>;
+  }
+
+  function handleClick() {
+    onNavigate();
+    // Fire-and-forget on purpose — navigation must never wait on, or be
+    // blocked by, this succeeding (mark-all-read on open already covers the
+    // common case; this is belt-and-suspenders for the specific row clicked).
+    if (isUnread) void markNotificationRead(notification.id);
+  }
+
+  return (
+    <Link
+      href={href}
+      onClick={handleClick}
+      className="tap-target block rounded-xl px-3 py-2.5 transition-colors hover:bg-bg-raised focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+    >
+      {body}
+    </Link>
   );
 }
 

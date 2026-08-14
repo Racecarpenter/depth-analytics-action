@@ -44,6 +44,8 @@ export async function createCustomActionAndInvite(input: {
   title: string;
   stakeAmount: number;
   opponentPhones: string[];
+  /** People picked from "you've had Action with" — see PersonPicker. Mixes freely with opponentPhones. */
+  opponentUserIds?: string[];
 }): Promise<CustomActionMutationResult> {
   const currentUser = await getCurrentUser();
   if (!currentUser) return { ok: false, error: "You need to be signed in." };
@@ -53,16 +55,21 @@ export async function createCustomActionAndInvite(input: {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid Action details." };
   }
 
+  const opponentUserIds = Array.from(new Set(input.opponentUserIds ?? []));
+  if (opponentUserIds.includes(currentUser.id)) {
+    return { ok: false, error: "You can't invite yourself." };
+  }
+
   const normalizedPhones: string[] = [];
   for (const raw of input.opponentPhones) {
     const normalized = normalizePhone(raw);
     if (!normalized) return { ok: false, error: "Enter a valid phone number for everyone." };
     normalizedPhones.push(normalized);
   }
-  if (normalizedPhones.length === 0) {
+  if (opponentUserIds.length + normalizedPhones.length === 0) {
     return { ok: false, error: "Add at least one opponent." };
   }
-  if (normalizedPhones.length + 1 > CUSTOM_ACTION_MAX_PARTICIPANTS) {
+  if (opponentUserIds.length + normalizedPhones.length + 1 > CUSTOM_ACTION_MAX_PARTICIPANTS) {
     return { ok: false, error: `Custom Actions support up to ${CUSTOM_ACTION_MAX_PARTICIPANTS} participants total.` };
   }
   if (new Set(normalizedPhones).size !== normalizedPhones.length) {
@@ -73,6 +80,23 @@ export async function createCustomActionAndInvite(input: {
   }
 
   const admin = createAdminClient();
+
+  // Cross-dedup between the two input shapes: a phone number belonging to
+  // an already-selected existing user shouldn't also sneak in as a
+  // separate phone-only participant (see PersonPicker's audit list item
+  // "Phone input should prevent adding a phone number belonging to a user
+  // already selected" — this is the server-side backstop for that).
+  if (opponentUserIds.length > 0 && normalizedPhones.length > 0) {
+    const { data: selectedUsers, error: selectedUsersError } = await admin
+      .from("users")
+      .select("phone")
+      .in("id", opponentUserIds);
+    if (selectedUsersError) logError("[createCustomActionAndInvite] selected-users lookup failed:", selectedUsersError);
+    const selectedPhones = new Set((selectedUsers ?? []).map((u) => u.phone));
+    if (normalizedPhones.some((p) => selectedPhones.has(p))) {
+      return { ok: false, error: "One of those phone numbers already belongs to someone you selected." };
+    }
+  }
 
   // Same authorization gate as createActionAndInvite: creating an Action —
   // any type — is the only thing ever monetized, and it counts as exactly
@@ -114,8 +138,33 @@ export async function createCustomActionAndInvite(input: {
       responded_at: new Date().toISOString(),
     });
 
-    const totalPlayers = normalizedPhones.length + 1;
+    const totalPlayers = opponentUserIds.length + normalizedPhones.length + 1;
     const stakeDisplay = formatStake(parsed.data.stakeAmount);
+
+    // Picked via the person picker: identity's already established, so no
+    // SMS invite link — same reasoning as the sports Action picker path
+    // (see createActionAndInvite). They see it in-app via "Needs your
+    // response" and respondToActionInvite.
+    for (const userId of opponentUserIds) {
+      const invited = await inviteParticipant(admin, currentUser.id, {
+        actionId: action.id,
+        userId,
+        inviteExpiryHours: INVITE_EXPIRY_HOURS,
+      });
+      if (!invited) {
+        throw new CustomActionCreationFailedError("Couldn't invite one of those people. Try again.");
+      }
+
+      if (invited.existingUserId) {
+        await createNotification(admin, {
+          userId: invited.existingUserId,
+          actionId: action.id,
+          type: "invite_received",
+          title: "New Action invite",
+          body: `You've been invited to: ${parsed.data.title}.`,
+        });
+      }
+    }
 
     for (const phone of normalizedPhones) {
       const invited = await inviteParticipant(admin, currentUser.id, {

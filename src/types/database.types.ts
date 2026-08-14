@@ -32,6 +32,8 @@ export interface Database {
           id: string;
           phone: string;
           display_name: string | null;
+          username: string | null;
+          avatar_path: string | null;
           cashtag: string | null;
           phone_verified_at: string | null;
           created_at: string;
@@ -41,6 +43,8 @@ export interface Database {
           id: string;
           phone: string;
           display_name?: string | null;
+          username?: string | null;
+          avatar_path?: string | null;
           cashtag?: string | null;
           phone_verified_at?: string | null;
           created_at?: string;
@@ -50,6 +54,8 @@ export interface Database {
           id?: string;
           phone?: string;
           display_name?: string | null;
+          username?: string | null;
+          avatar_path?: string | null;
           cashtag?: string | null;
           phone_verified_at?: string | null;
           created_at?: string;
@@ -980,6 +986,42 @@ export interface Database {
         Args: Record<PropertyKey, never>;
         Returns: { phone: string; display_name: string | null; granted_at: string; expires_at: string | null; note: string | null }[];
       };
+      grant_beta_paywall_credits: {
+        Args: { p_user_id: string; p_amount?: number };
+        Returns: { granted: boolean; reason: string | null; balance_after: number | null }[];
+      };
+      get_people_with_action_history: {
+        Args: { p_user_id: string; p_search?: string | null; p_limit?: number };
+        Returns: {
+          user_id: string;
+          display_name: string | null;
+          username: string | null;
+          avatar_path: string | null;
+          actions_together: number;
+          last_interaction_at: string | null;
+        }[];
+      };
+      get_user_action_stats: {
+        Args: { p_user_id: string };
+        Returns: {
+          wins: number;
+          losses: number;
+          total_actions: number;
+          settled_count: number;
+          owed_total_count: number;
+        }[];
+      };
+      get_head_to_head_stats: {
+        Args: { p_user_id: string; p_other_user_id: string };
+        Returns: {
+          actions_together: number;
+          viewer_wins: number;
+          viewer_losses: number;
+          net_amount: number;
+          obligations_count: number;
+          all_settled: boolean;
+        }[];
+      };
     };
     Enums: {
       league: "NFL" | "NBA" | "MLB" | "NHL";
@@ -988,9 +1030,9 @@ export interface Database {
       action_status: "pending" | "accepted" | "declined" | "live" | "won" | "lost" | "push" | "cancelled" | "expired" | "resolved";
       participant_role: "creator" | "opponent";
       participant_status: "invited" | "accepted" | "declined";
-      notification_type: "invite_received" | "action_accepted" | "action_declined" | "action_live" | "action_settled" | "action_cancelled" | "referral_reward_earned" | "payment_owed" | "payment_reminder" | "payment_marked_paid" | "payment_confirmed" | "payment_disputed";
+      notification_type: "invite_received" | "action_accepted" | "action_declined" | "action_live" | "action_settled" | "action_cancelled" | "referral_reward_earned" | "payment_owed" | "payment_reminder" | "payment_marked_paid" | "payment_confirmed" | "payment_disputed" | "profile_completion";
       changed_by_actor: "system" | "creator" | "opponent";
-      credit_transaction_type: "starter_grant" | "referral_reward" | "action_pack_purchase" | "action_created" | "admin_adjustment";
+      credit_transaction_type: "starter_grant" | "referral_reward" | "action_pack_purchase" | "action_created" | "admin_adjustment" | "beta_grant";
       purchase_kind: "action_pack" | "action_pass";
       purchase_status: "completed" | "refunded";
       payment_settlement_status: "not_applicable" | "owed" | "marked_paid" | "settled" | "disputed";

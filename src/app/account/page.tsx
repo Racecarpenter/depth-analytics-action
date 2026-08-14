@@ -27,6 +27,16 @@ export default async function AccountPage() {
           <BalanceBadge entitlement={entitlement} />
         </div>
 
+        <Link
+          href="/profile"
+          className="mb-6 flex items-center justify-between rounded-xl border border-border-strong bg-bg-raised px-4 py-3 text-sm text-ink transition-colors hover:border-ink-faint"
+        >
+          <span>Your profile</span>
+          <span className="text-ink-faint">
+            {user.display_name ? `@${user.username ?? ""}` : "Add a name and photo"}
+          </span>
+        </Link>
+
         <SignOutButton />
 
         <p className="mt-8 text-xs text-ink-faint">

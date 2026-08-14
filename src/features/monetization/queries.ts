@@ -7,8 +7,15 @@ export interface EntitlementSummary {
   /** sum(amount) over action_credit_transactions — never a stored counter. */
   balance: number;
   activePass: { expiresAt: string } | null;
-  /** Active beta_unlimited entitlement — see supabase/migrations/0015_beta_entitlements.sql. */
-  betaUnlimited: boolean;
+  /**
+   * Authorized beta tester — an active `beta_unlimited` row in
+   * user_entitlements (see supabase/migrations/0015_beta_entitlements.sql).
+   * Despite the entitlement_type's name, this no longer means unlimited
+   * Actions (see 0018_beta_paywall_credits.sql) — it only means eligible
+   * for the temporary beta free-credit paywall option. Renders/enforced via
+   * src/features/monetization/lib/beta-credits.ts + beta-mutations.ts.
+   */
+  isBetaTester: boolean;
   canCreateAction: boolean;
   /**
    * True if a genuine Supabase read failed on the way to computing the
@@ -57,19 +64,24 @@ export async function getEntitlementSummary(): Promise<EntitlementSummary> {
     // the RPC will correctly deny and surface the real paywall then.
     // What we must never do is claim balance: 0 as if that were a
     // legitimate read.
-    return { balance: 0, activePass: null, betaUnlimited: false, canCreateAction: true, error: true };
+    return { balance: 0, activePass: null, isBetaTester: false, canCreateAction: true, error: true };
   }
 
   const now = Date.now();
   const activePassRow = (passesResult.data ?? []).find((p) => new Date(p.expires_at).getTime() > now);
   const balance = (transactionsResult.data ?? []).reduce((sum, t) => sum + t.amount, 0);
-  const betaUnlimited = (betaResult.data ?? []).some((e) => !e.expires_at || new Date(e.expires_at).getTime() > now);
+  const isBetaTester = (betaResult.data ?? []).some((e) => !e.expires_at || new Date(e.expires_at).getTime() > now);
 
   return {
     balance,
     activePass: activePassRow ? { expiresAt: activePassRow.expires_at } : null,
-    betaUnlimited,
-    canCreateAction: betaUnlimited || Boolean(activePassRow) || balance > 0,
+    isBetaTester,
+    // Beta testers are NOT exempt here on purpose (see
+    // 0018_beta_paywall_credits.sql) — the whole point is that they hit the
+    // real paywall like anyone else. isBetaTester only ever gates whether
+    // the free beta-credit option appears ON the paywall, never whether the
+    // paywall appears at all.
+    canCreateAction: Boolean(activePassRow) || balance > 0,
     error: false,
   };
 }

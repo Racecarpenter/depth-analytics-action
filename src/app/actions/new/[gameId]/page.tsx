@@ -7,6 +7,7 @@ import { requireUser } from "@/features/auth/session";
 import { ActionBuilder } from "@/features/actions/components/action-builder";
 import { getEntitlementSummary } from "@/features/monetization/queries";
 import { Paywall } from "@/features/monetization/components/paywall";
+import { isBetaFreeCreditsFeatureEnabled } from "@/features/monetization/lib/beta-credits";
 import { getSportsDataProvider } from "@/lib/sports-data";
 
 export default async function NewActionForGamePage({
@@ -41,7 +42,13 @@ export default async function NewActionForGamePage({
         <AppHeader />
         <PageContainer>
           <BackLink href="/actions/new" label="Search" />
-          <Paywall returnTo={`/actions/new/${gameId}`} justPurchased={checkout === "success"} />
+          <Paywall
+            returnTo={`/actions/new/${gameId}`}
+            justPurchased={checkout === "success"}
+            actionPackPurchasable={Boolean(process.env.STRIPE_PRICE_ACTION_PACK)}
+            actionPassPurchasable={Boolean(process.env.STRIPE_PRICE_ACTION_PASS)}
+            betaCreditsAvailable={entitlement.isBetaTester && isBetaFreeCreditsFeatureEnabled()}
+          />
         </PageContainer>
       </>
     );
