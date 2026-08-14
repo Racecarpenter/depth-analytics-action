@@ -12,6 +12,7 @@ import { RESULT_COPY } from "@/lib/settlement/copy";
 import { getSmsProvider } from "@/lib/sms";
 import { APP_NAME, SMS_OPT_OUT_SUFFIX } from "@/lib/constants";
 import { formatStake } from "@/lib/utils/currency";
+import { logError } from "@/lib/utils/log-error";
 
 export const dynamic = "force-dynamic";
 
@@ -97,7 +98,18 @@ export async function GET(request: NextRequest) {
     if (!game) continue; // sports Actions always have one; guards the type only
     summary.gamesChecked += 1;
 
-    const event = await provider.getEvent(game.external_id, game.league);
+    // A provider lookup failure for one game (bad/stale external_id, a
+    // transient API error, etc.) must never take down settlement for every
+    // other open game in the same tick — this cron used to let an unhandled
+    // throw here abort the whole loop, silently starving unrelated Actions
+    // of grading until the bad game was fixed or removed. Log and move on.
+    let event;
+    try {
+      event = await provider.getEvent(game.external_id, game.league);
+    } catch (err) {
+      logError(`[settle] provider.getEvent failed for game ${game.id} (${game.league} ${game.external_id}):`, err);
+      continue;
+    }
     if (!event) continue;
 
     await syncGameFromEvent(admin, event, provider.name);
@@ -141,7 +153,13 @@ export async function GET(request: NextRequest) {
 
     if (event.status !== "final") continue;
 
-    const result = await provider.getGameResult(game.external_id, game.league);
+    let result;
+    try {
+      result = await provider.getGameResult(game.external_id, game.league);
+    } catch (err) {
+      logError(`[settle] provider.getGameResult failed for game ${game.id} (${game.league} ${game.external_id}):`, err);
+      continue;
+    }
     if (!result) continue;
 
     for (const action of gameActions) {

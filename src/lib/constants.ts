@@ -50,9 +50,6 @@ export const STATUS_TONE: Record<ActionStatus, string> = {
 
 export const INVITE_EXPIRY_HOURS = 72;
 
-export const OTP_EXPIRY_MINUTES = 10;
-export const OTP_MAX_ATTEMPTS = 5;
-
 export const APP_NAME = "ACTION";
 export const APP_TAGLINE = "by Depth Analytics";
 

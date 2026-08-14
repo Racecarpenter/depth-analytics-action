@@ -9,7 +9,9 @@ import type { Database } from "@/types/database.types";
  * makes that a build error if you try).
  *
  * Reserved for:
- *   - the phone-OTP flow (reading/writing auth_otp_codes, creating auth users)
+ *   - the phone-OTP flow (recording sms_consent_events, creating/updating
+ *     auth users — code verification itself goes through Twilio Verify, not
+ *     this client; see src/features/auth/mutations.ts)
  *   - creating a participant row for a phone number with no account yet
  *   - the settlement cron job
  * All callers are expected to perform their own authorization checks before

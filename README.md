@@ -51,7 +51,7 @@ src/
 
   lib/
     supabase/                client.ts (browser) / server.ts (RLS-scoped) / admin.ts (service role)
-    sms/                     SmsProvider interface + mock + Twilio implementations
+    sms/                     SmsProvider (transactional SMS) + VerifyProvider (login OTP, Twilio Verify v2) — each with mock + Twilio implementations
     sports-data/              SportsDataProvider interface + mock + The Odds API implementations
     stripe/                   Cached Stripe client singleton
     monetization/              pricing.ts (single source of truth for all prices/quantities), analytics.ts
@@ -123,8 +123,9 @@ cp .env.example .env.local
 | `NEXT_PUBLIC_APP_URL` | `http://localhost:3000` locally |
 | `INVITE_TOKEN_SECRET` | Run `openssl rand -hex 32` and paste the **output** — not the command itself. |
 | `CRON_SECRET` | Same as above — also matched automatically by Vercel Cron in production. |
-| `SMS_PROVIDER` | `mock` for local dev (default) |
-| `TWILIO_MESSAGING_SERVICE_SID` | Twilio Console → Messaging → Services (once your A2P 10DLC campaign is registered). Preferred over `TWILIO_FROM_NUMBER` — see "SMS consent & Twilio A2P 10DLC" below. |
+| `SMS_PROVIDER` | `mock` for local dev (default) — controls both transactional SMS and login OTP (Twilio Verify) |
+| `TWILIO_MESSAGING_SERVICE_SID` | Twilio Console → Messaging → Services (once your A2P 10DLC campaign is registered). Preferred over `TWILIO_FROM_NUMBER` — see "SMS consent & Twilio A2P 10DLC" below. Used for everything except login OTP. |
+| `TWILIO_VERIFY_SERVICE_SID` | Twilio Console → Verify → Services. Used only by the login-OTP flow — see "How phone auth actually works" below. |
 | `SPORTS_DATA_PROVIDER` | `mock` for local dev (default) |
 | `SITE_PASSWORD` / `SITE_GATE_SECRET` | Optional. Leave both blank locally. See "Site-wide password gate" below. |
 | `STRIPE_SECRET_KEY` | Stripe → Developers → API keys. Use a test-mode key locally. |
@@ -155,8 +156,10 @@ curl http://localhost:3000/api/cron/settle
 
 ### SMS: mock → Twilio
 
-1. Set `SMS_PROVIDER=twilio`
-2. Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and either `TWILIO_MESSAGING_SERVICE_SID` (preferred — see "SMS consent & Twilio A2P 10DLC" below) or `TWILIO_FROM_NUMBER`
+1. Set `SMS_PROVIDER=twilio` — this single flag switches both `getSmsProvider()` (transactional SMS) and `getVerifyProvider()` (login OTP) over to Twilio at once.
+2. Set `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` (shared by both).
+3. For transactional SMS: set either `TWILIO_MESSAGING_SERVICE_SID` (preferred — see "SMS consent & Twilio A2P 10DLC" below) or `TWILIO_FROM_NUMBER`.
+4. For login OTP: set `TWILIO_VERIFY_SERVICE_SID` (Twilio Console → Verify → Services). This is a separate Twilio product from the Messaging Service above and has no A2P 10DLC campaign requirement of its own.
 
 Nothing else changes — `src/lib/sms/index.ts` is the only place that reads `SMS_PROVIDER`.
 
@@ -308,10 +311,14 @@ Independent of the phone-auth system above — this is a single shared password 
 
 ## How phone auth actually works
 
-ACTION runs its **own** OTP flow (`src/features/auth/mutations.ts`) instead of Supabase Auth's built-in phone provider, specifically so the SMS provider stays swappable without touching Supabase project settings. The short version:
+ACTION runs its **own** OTP flow (`src/features/auth/mutations.ts`) instead of Supabase Auth's built-in phone provider, specifically so the SMS provider stays swappable without touching Supabase project settings. Code generation, delivery, expiry, and attempt-limiting are all delegated to **Twilio Verify v2** — ACTION itself never generates, stores, or hashes a code. The short version:
 
-1. `requestOtp` generates a 6-digit code, stores its hash in `auth_otp_codes` (a small support table, not one of the seven domain tables), and sends it through the active `SmsProvider`.
-2. `verifyOtp` checks the code, then finds-or-creates a Supabase Auth user for that phone number, sets a one-time random password on it server-side, and immediately exchanges it for a real session via `signInWithPassword`. The password never leaves that function or reaches the client.
+1. `requestOtp` calls `getVerifyProvider().startVerification(phone)` (`src/lib/sms/twilio-verify.ts`), which creates a Twilio Verify verification. Twilio generates the code, sends it, and owns everything about its lifecycle from that point on.
+2. `verifyOtp` calls `getVerifyProvider().checkVerification(phone, code)`, which calls Twilio's `VerificationCheck` endpoint. The rest of the sign-in flow — finding or creating a Supabase Auth user for that phone number, setting a one-time random password on it server-side, and immediately exchanging it for a real session via `signInWithPassword` — only runs when Twilio reports `status === "approved"`. The password never leaves that function or reaches the client.
+
+The mock provider (`SMS_PROVIDER=mock`, the default) reproduces this locally without a Twilio account: `MockVerifyProvider` (`src/lib/sms/mock-verify.ts`) generates its own code, logs it to the server console, and keeps it in memory just long enough to check it back — nothing is persisted to the database.
+
+**Twilio Verify is a separate product from the Messaging Service** used for every other SMS in the app (invites, results, nudges, reminders — see "SMS consent & Twilio A2P 10DLC" below). It has its own SID (`TWILIO_VERIFY_SERVICE_SID`, Twilio Console → Verify → Services), its own message copy that ACTION doesn't control, and no A2P 10DLC campaign requirement — Verify traffic isn't marketing or conversational SMS, so it isn't subject to that registration process.
 
 This means the **Phone** provider must be turned on for your Supabase project — it is **not** on by default. In the dashboard: Authentication → Providers → Phone → enable. If the UI asks you to pick an SMS vendor before it lets you save, any selection is fine (e.g. Twilio with placeholder values) — ACTION never calls Supabase's own `signInWithOtp` send path, so those credentials are never actually used. Only the provider toggle itself matters. You do **not** need to configure a real Twilio integration inside Supabase.
 
@@ -325,13 +332,13 @@ ACTION sends transactional SMS only — verification codes, Action invitations, 
 
 **Consent is recorded, not just displayed.** Every call to `requestOtp` (`src/features/auth/mutations.ts`) inserts a row into `sms_consent_events` (`supabase/migrations/0016_sms_consent.sql`): `user_id` (nullable — a brand-new phone number has no account yet at this instant), `phone`, `consent_source` (`"web"`), `consent_version`, `created_at`. `consent_version` is `SMS_DISCLOSURE_VERSION` — bump that constant any time `SMS_DISCLOSURE_TEXT`'s wording changes materially, so the audit trail always shows exactly which disclosure version a given consent event was given under. This is an append-only log (RLS enabled, zero policies — service-role only, same pattern as `analytics_events`), not an elaborate compliance system: no UI reads it, it exists purely as an audit trail if Twilio or a carrier ever asks for one.
 
-**OTP delivery stays logically separate from the opt-out list.** The campaign's own consent language bundles verification codes into the same STOP scope as everything else — so OTP is never exempted from opt-out (that would itself be a compliance problem, not a fix). Instead, `TwilioSmsProvider.send()` (`src/lib/sms/twilio.ts`) never throws; every call site already treats SMS as fire-and-forget except `requestOtp`, which now checks the result and returns an honest, actionable error ("We couldn't text that number. If you've opted out of texts from Action, text START to resume, then try again.") instead of silently claiming success or crashing.
+**OTP delivery stays logically separate from the opt-out list.** The campaign's own consent language bundles verification codes into the same STOP scope as everything else — so OTP is never exempted from opt-out (that would itself be a compliance problem, not a fix). `requestOtp` checks the result of `getVerifyProvider().startVerification()` and returns an honest, actionable error ("We couldn't text that number. If you've opted out of texts from Action, text START to resume, then try again.") instead of silently claiming success or crashing — mirroring the same never-throw contract `TwilioSmsProvider.send()` (`src/lib/sms/twilio.ts`) uses for every other SMS. Twilio Verify (`src/lib/sms/twilio-verify.ts`) manages its own opt-out/compliance handling for OTP traffic, separate from the Messaging Service's Advanced Opt-Out described below.
 
 **STOP/HELP handling.** This is entirely Twilio's job, not ACTION's — enable **Advanced Opt-Out** on your Messaging Service (Twilio Console → Messaging → Services → your service → Integration) once your A2P 10DLC campaign is approved. Twilio then auto-replies to STOP/START/HELP and blocks future sends to opted-out numbers at the API level (a send to an opted-out number fails with Twilio error 21610, which `TwilioSmsProvider.send()` already handles as a soft failure — see above). ACTION deliberately does **not** maintain its own `sms_opted_out_at` column or an inbound-SMS webhook — that would duplicate carrier-level functionality Twilio already provides, and there's no product need to build a larger inbound messaging system.
 
 **Campaigns register against a Messaging Service, not a bare number.** Once your A2P 10DLC campaign is approved, set `TWILIO_MESSAGING_SERVICE_SID` (Twilio Console → Messaging → Services) — `src/lib/sms/index.ts` prefers it over `TWILIO_FROM_NUMBER` when both are set, since that's what the campaign actually attaches to and what makes Advanced Opt-Out apply. `TWILIO_FROM_NUMBER` alone still works as a fallback for a bare number with no Messaging Service configured.
 
-**Template identification.** Every outgoing transactional SMS is prefixed `ACTION:` and suffixed with `SMS_OPT_OUT_SUFFIX` (" Reply STOP to opt out.") — see the call sites in `src/features/actions/mutations.ts`, `src/features/custom-actions/mutations.ts`, `src/features/settlement/mutations.ts`, `src/features/monetization/mutations.ts`, and `src/app/api/cron/{settle,payment-reminders}/route.ts`. The OTP message carries its own short opt-out line inline instead, since it's already brand-identified by naming the code purpose.
+**Template identification.** Every outgoing transactional SMS is prefixed `ACTION:` and suffixed with `SMS_OPT_OUT_SUFFIX` (" Reply STOP to opt out.") — see the call sites in `src/features/actions/mutations.ts`, `src/features/custom-actions/mutations.ts`, `src/features/settlement/mutations.ts`, `src/features/monetization/mutations.ts`, and `src/app/api/cron/{settle,payment-reminders}/route.ts`. The OTP message is composed and sent entirely by Twilio Verify — ACTION doesn't construct or see its text, so `SMS_OPT_OUT_SUFFIX` doesn't apply to it. Configure the message template (including any opt-out language) in Twilio Console → Verify → Services → your service, if you want to customize it.
 
 **`/privacy` and `/terms`** are public, unauthenticated pages (`src/app/privacy/page.tsx`, `src/app/terms/page.tsx`) linked from the SMS disclosure, the account page footer, and reachable even if the site-wide password gate (see below) is active — both routes are listed in `ALWAYS_PUBLIC_ROUTES` (`src/lib/utils/site-gate.ts`), which both gate checks (`middleware.ts`/`proxy.ts` and the root layout's `isSiteGatePassed()`) read. Contact info on both pages uses `SUPPORT_EMAIL` in `src/lib/constants.ts` — **replace that placeholder with a real, monitored address before production or before submitting for Twilio review.**
 
@@ -339,7 +346,7 @@ ACTION sends transactional SMS only — verification codes, Action invitations, 
 
 ## Database
 
-Seven domain tables (`supabase/migrations/0001_init.sql`): `users`, `teams`, `games`, `actions`, `participants`, `action_status_history`, `notifications`. One supporting table (`0002_auth_otp.sql`): `auth_otp_codes`, used only by the phone-auth flow above. `0004_cashtag.sql` adds a nullable `cashtag` column to `users`, now dormant (see "Cash App (dormant)" above). `0005_monetization.sql` adds six more: `purchases`, `action_passes`, `action_credit_transactions`, `referrals`, `stripe_webhook_events`, `analytics_events` — see "Monetization" above. `0006_referral_notification.sql` adds one enum value for the referral-reward notification. `0007_payment_settlement.sql` adds `actions.payment_status` and the `payment_settlement_events` table — see "Payment settlement" above. `0008_payment_notification_types.sql` adds five enum values for payment notifications.
+Seven domain tables (`supabase/migrations/0001_init.sql`): `users`, `teams`, `games`, `actions`, `participants`, `action_status_history`, `notifications`. One supporting table (`0002_auth_otp.sql`): `auth_otp_codes` — **legacy/unused.** It backed ACTION's original hand-rolled OTP implementation; phone auth now delegates code generation/verification to Twilio Verify (see "How phone auth actually works") and no code path reads or writes this table anymore. Left in place rather than dropped, per this repo's convention of not destructively removing already-applied migrations/columns — safe to drop in a future cleanup migration if desired. `0004_cashtag.sql` adds a nullable `cashtag` column to `users`, now dormant (see "Cash App (dormant)" above). `0005_monetization.sql` adds six more: `purchases`, `action_passes`, `action_credit_transactions`, `referrals`, `stripe_webhook_events`, `analytics_events` — see "Monetization" above. `0006_referral_notification.sql` adds one enum value for the referral-reward notification. `0007_payment_settlement.sql` adds `actions.payment_status` and the `payment_settlement_events` table — see "Payment settlement" above. `0008_payment_notification_types.sql` adds five enum values for payment notifications.
 
 `0009_custom_actions.sql` adds `action_type`, `title`, `winner_participant_id`, and `voting_round` to `actions` (and drops the old 2-participant-only constraints/NOT NULLs that assumed every Action was a sports matchup), plus the `custom_action_votes` table — see "Custom Actions" above. `0010_custom_action_status.sql` adds the `resolved` status value on its own, per the enum-value-needs-its-own-transaction rule above. `0011_settlement_obligations.sql` is the big one: adds `settlement_obligations` (one row per debtor→creditor pair, replacing the old assumption that an Action has exactly one loser), backfills it from every existing `actions.payment_status`/`payment_settlement_events` row, and rewrites all six settlement RPCs to be obligation-scoped instead of Action-scoped — see "Payment settlement" above. `0012_custom_action_storage.sql` creates the private `custom-action-proof` Storage bucket + RLS policies. `0013_custom_action_voting.sql` adds the two voting RPCs.
 

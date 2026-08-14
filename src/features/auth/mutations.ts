@@ -4,8 +4,8 @@ import crypto from "node:crypto";
 import { redirect } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { getSmsProvider } from "@/lib/sms";
-import { APP_NAME, OTP_EXPIRY_MINUTES, OTP_MAX_ATTEMPTS, SMS_DISCLOSURE_VERSION } from "@/lib/constants";
+import { getVerifyProvider } from "@/lib/sms";
+import { SMS_DISCLOSURE_VERSION } from "@/lib/constants";
 import { logError } from "@/lib/utils/log-error";
 import { otpVerifySchema, phoneRequestSchema } from "@/lib/validations/auth";
 import { PRICING } from "@/lib/monetization/pricing";
@@ -15,11 +15,6 @@ export interface AuthActionResult {
   ok: boolean;
   error?: string;
   phone?: string;
-}
-
-function hashCode(phone: string, code: string) {
-  const secret = process.env.INVITE_TOKEN_SECRET ?? "";
-  return crypto.createHash("sha256").update(`${phone}:${code}:${secret}`).digest("hex");
 }
 
 function digitsOnly(phone: string) {
@@ -49,9 +44,11 @@ async function findAuthUserByPhone(admin: ReturnType<typeof createAdminClient>, 
 }
 
 /**
- * Step 1 of phone auth: validates the number, generates a 6-digit code,
- * stores its hash, and sends it through the pluggable SmsProvider. The mock
- * provider just logs it to the server console — see src/lib/sms/mock.ts.
+ * Step 1 of phone auth: validates the number and asks Twilio Verify to start
+ * a verification (Twilio generates the code, texts it, and owns its expiry
+ * and attempt-limiting from here — see src/lib/sms/twilio-verify.ts). The
+ * mock provider logs a code to the server console instead — see
+ * src/lib/sms/mock-verify.ts.
  */
 export async function requestOtp(rawPhone: string): Promise<AuthActionResult> {
   const parsed = phoneRequestSchema.safeParse({ phone: rawPhone });
@@ -60,22 +57,7 @@ export async function requestOtp(rawPhone: string): Promise<AuthActionResult> {
   }
 
   const phone = parsed.data.phone;
-  const code = crypto.randomInt(100000, 1000000).toString();
-  const expiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60_000).toISOString();
-
   const admin = createAdminClient();
-  const { error } = await admin
-    .from("auth_otp_codes")
-    .upsert({ phone, code_hash: hashCode(phone, code), expires_at: expiresAt, attempts: 0 });
-
-  if (error) {
-    // Logged server-side (check your `npm run dev` terminal) since the most
-    // common causes here are setup issues — migrations not run against this
-    // Supabase project, or a wrong/missing SUPABASE_SERVICE_ROLE_KEY — and
-    // the raw Postgres/PostgREST error message says exactly which.
-    logError("[requestOtp] auth_otp_codes upsert failed:", error);
-    return { ok: false, error: "Couldn't send a code right now. Try again." };
-  }
 
   // SMS consent record — this call is the exact "affirmative action of
   // entering their phone number and pressing Send Code" moment the
@@ -93,18 +75,15 @@ export async function requestOtp(rawPhone: string): Promise<AuthActionResult> {
   });
   if (consentError) logError("[requestOtp] sms_consent_events insert failed:", consentError);
 
-  const sendResult = await getSmsProvider().send({
-    to: phone,
-    body: `${code} is your ${APP_NAME} verification code. Expires in ${OTP_EXPIRY_MINUTES} min. Reply STOP to opt out.`,
-  });
+  const startResult = await getVerifyProvider().startVerification(phone);
 
-  if (!sendResult.ok) {
-    // Never throws (see TwilioSmsProvider) — a failed send is most commonly
-    // either a genuine delivery problem or this number having texted STOP
-    // to Action before. Either way, the honest and recoverable response is
-    // to say so and point at the standard opt-back-in path, not to silently
-    // report success or crash with a generic error.
-    logError("[requestOtp] SMS send failed:", sendResult.error);
+  if (!startResult.ok) {
+    // Never throws (see TwilioVerifyProvider) — a failed start is most
+    // commonly either a genuine delivery problem or this number having
+    // texted STOP to Action before. Either way, the honest and recoverable
+    // response is to say so and point at the standard opt-back-in path, not
+    // to silently report success or crash with a generic error.
+    logError("[requestOtp] Twilio Verify startVerification failed:", startResult.error);
     return {
       ok: false,
       error: "We couldn't text that number. If you've opted out of texts from Action, text START to resume, then try again.",
@@ -115,15 +94,16 @@ export async function requestOtp(rawPhone: string): Promise<AuthActionResult> {
 }
 
 /**
- * Step 2 of phone auth: verifies the code, then finds-or-creates a Supabase
- * Auth user for that phone number and signs them in.
+ * Step 2 of phone auth: has Twilio Verify check the submitted code, then
+ * finds-or-creates a Supabase Auth user for that phone number and signs
+ * them in — but only when Twilio reports the verification as approved.
  *
- * ACTION owns OTP generation/verification itself (rather than Supabase
- * Auth's built-in phone flow) specifically so the SMS provider stays
- * swappable without any Supabase project configuration. To still end up
- * with a real Supabase session, we set a one-time random password on the
- * user server-side and immediately exchange it for a session via
- * signInWithPassword — the password never leaves this function.
+ * ACTION delegates OTP generation/verification to Twilio Verify (rather
+ * than Supabase Auth's built-in phone flow) specifically so the SMS
+ * provider stays swappable without any Supabase project configuration. To
+ * still end up with a real Supabase session, we set a one-time random
+ * password on the user server-side and immediately exchange it for a
+ * session via signInWithPassword — the password never leaves this function.
  */
 export async function verifyOtp(rawPhone: string, rawCode: string): Promise<AuthActionResult> {
   const parsed = otpVerifySchema.safeParse({ phone: rawPhone, code: rawCode });
@@ -133,30 +113,19 @@ export async function verifyOtp(rawPhone: string, rawCode: string): Promise<Auth
   const { phone, code } = parsed.data;
   const admin = createAdminClient();
 
-  const { data: row } = await admin
-    .from("auth_otp_codes")
-    .select("*")
-    .eq("phone", phone)
-    .maybeSingle();
+  const checkResult = await getVerifyProvider().checkVerification(phone, code);
 
-  if (!row) return { ok: false, error: "That code has expired. Request a new one." };
-
-  if (new Date(row.expires_at) < new Date()) {
-    await admin.from("auth_otp_codes").delete().eq("phone", phone);
-    return { ok: false, error: "That code has expired. Request a new one." };
+  if (!checkResult.ok) {
+    // Never throws (see TwilioVerifyProvider) — a failed check call itself
+    // (as opposed to a wrong code, which is `ok: true, approved: false`) is
+    // most likely a transient Twilio/network issue.
+    logError("[verifyOtp] Twilio Verify checkVerification failed:", checkResult.error);
+    return { ok: false, error: "Couldn't verify that code right now. Try again." };
   }
 
-  if (row.attempts >= OTP_MAX_ATTEMPTS) {
-    await admin.from("auth_otp_codes").delete().eq("phone", phone);
-    return { ok: false, error: "Too many attempts. Request a new code." };
-  }
-
-  if (row.code_hash !== hashCode(phone, code)) {
-    await admin.from("auth_otp_codes").update({ attempts: row.attempts + 1 }).eq("phone", phone);
+  if (!checkResult.approved) {
     return { ok: false, error: "That code isn't right. Try again." };
   }
-
-  await admin.from("auth_otp_codes").delete().eq("phone", phone);
 
   const tempPassword = crypto.randomBytes(24).toString("hex");
 
